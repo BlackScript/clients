@@ -31,7 +31,7 @@ import {
   TableDataSource,
   ToastService,
   TypographyModule,
-  ChipSelectComponent,
+  ChipFilterComponent,
 } from "@bitwarden/components";
 import { ExportHelper } from "@bitwarden/vault-export-core";
 import { exportToCSV } from "@bitwarden/web-vault/app/dirt/reports/report-utils";
@@ -69,7 +69,7 @@ export type ApplicationFilterOption =
     TypographyModule,
     ButtonModule,
     ReactiveFormsModule,
-    ChipSelectComponent,
+    ChipFilterComponent,
   ],
 })
 export class ApplicationsComponent implements OnInit {
