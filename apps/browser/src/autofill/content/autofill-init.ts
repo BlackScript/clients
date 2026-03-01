@@ -157,68 +157,96 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Versucht das Formular abzusenden. Sucht aggressiv nach dem Submit-Button:
-   * 1. type="submit" Buttons/Inputs
-   * 2. Alle klickbaren Elemente mit Submit-Keywords im Text/Attributen
-   * 3. Einziger sichtbarer Button auf der Seite → klicken
-   * 4. form.requestSubmit() als Fallback
+   * Versucht das Formular abzusenden.
+   *
+   * Strategie (Reihenfolge):
+   * 1. form.requestSubmit() — zuverlässigste Methode, funktioniert mit
+   *    Vue/React/Angular (@submit.prevent etc.), auch wenn Button disabled ist
+   * 2. Nicht-disabled type="submit" Button klicken
+   * 3. Klickbare Elemente mit Submit-Keywords suchen (Text, Attribute)
+   * 4. cursor:pointer Elemente nahe dem gefüllten Feld (für ExtJS etc.)
+   * 5. Einziger sichtbarer nicht-Cancel-Button → klicken
    */
   private trySubmitForm() {
-    // Referenz auf das zuletzt gefüllte Element nutzen
     const filledEl = this.lastFilledElement;
     const form = filledEl?.closest("form") as HTMLFormElement;
 
-    // Breiter Selektor für alle klickbaren Elemente
-    const clickableSelector =
-      "button, input[type='submit'], input[type='button'], " +
-      "[role='button'], a.btn, a[class*='button'], a[class*='btn'], " +
-      "a[class*='submit'], a[class*='login'], span[class*='btn'], " +
-      "div[class*='btn'], span[onclick], div[onclick]";
+    // 1. form.requestSubmit() — beste Methode für Vue/React/Angular
+    // Triggert den submit-Event den Frameworks wie Vue über @submit.prevent abfangen
+    if (form) {
+      try {
+        form.requestSubmit();
+        return;
+      } catch {
+        // requestSubmit kann fehlschlagen wenn der einzige Submit-Button disabled ist
+        // In dem Fall weiter zu den Button-Strategien
+        try {
+          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+          return;
+        } catch {
+          // Weiter zur Button-Suche
+        }
+      }
+    }
 
-    // 1. Expliziten type="submit" suchen
+    // Selektor für klickbare Elemente (breit: Standard + Frameworks wie ExtJS)
+    const clickableSelector =
+      "button:not([disabled]), input[type='submit']:not([disabled]), " +
+      "input[type='button']:not([disabled]), [role='button'], " +
+      "a.btn, a[class*='button'], a[class*='btn'], " +
+      "span[class*='btn'], div[class*='btn']";
+
+    // 2. Nicht-disabled type="submit" Button
     const submitBtn = document.querySelector<HTMLElement>(
-      "input[type='submit'], button[type='submit']",
+      "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])",
     );
     if (submitBtn && this.isElementVisible(submitBtn)) {
-      submitBtn.click();
+      this.simulateFullClick(submitBtn);
       return;
     }
 
-    // 2. Alle klickbaren Elemente mit Submit-Keywords durchsuchen
+    // 3. Klickbare Elemente mit Submit-Keywords
     const allClickables = document.querySelectorAll<HTMLElement>(clickableSelector);
     for (const el of Array.from(allClickables)) {
       if (this.isSubmitElement(el) && this.isElementVisible(el)) {
-        el.click();
+        this.simulateFullClick(el);
         return;
       }
     }
 
-    // 3. Einziger sichtbarer Button auf der Seite → wahrscheinlich der Submit
+    // 4. cursor:pointer Elemente nahe dem gefüllten Feld (ExtJS, Custom UIs)
+    if (filledEl) {
+      const pointerEl = this.findNearestPointerElement(filledEl);
+      if (pointerEl) {
+        this.simulateFullClick(pointerEl);
+        return;
+      }
+    }
+
+    // 5. Einziger sichtbarer nicht-Cancel-Button auf der Seite
     const visibleButtons = Array.from(allClickables).filter(
       (el) => this.isElementVisible(el) && !this.isResetOrCancelButton(el),
     );
     if (visibleButtons.length === 1) {
-      visibleButtons[0].click();
+      this.simulateFullClick(visibleButtons[0]);
       return;
     }
 
-    // 4. Bei mehreren Buttons: den nächsten zum gefüllten Feld wählen
-    if (filledEl && visibleButtons.length > 1) {
-      const closest = this.findClosestElement(filledEl, visibleButtons);
-      if (closest) {
-        closest.click();
-        return;
-      }
-    }
-
-    // 5. form.requestSubmit() als Fallback
+    // 6. Letzter Fallback: form.submit() (ohne Events, direkte Submission)
     if (form) {
-      if (form.requestSubmit) {
-        form.requestSubmit();
-      } else {
-        form.submit();
-      }
+      form.submit();
     }
+  }
+
+  /**
+   * Simuliert einen vollständigen Mausklick (mousedown → mouseup → click).
+   * Manche Frameworks reagieren nur auf die vollständige Event-Sequenz.
+   */
+  private simulateFullClick(element: HTMLElement) {
+    const eventInit: MouseEventInit = { bubbles: true, cancelable: true, view: window };
+    element.dispatchEvent(new MouseEvent("mousedown", eventInit));
+    element.dispatchEvent(new MouseEvent("mouseup", eventInit));
+    element.click();
   }
 
   /**
@@ -230,7 +258,7 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Prüft ob ein Element ein Cancel/Reset-Button ist (soll nicht geklickt werden).
+   * Prüft ob ein Element ein Cancel/Reset-Button ist.
    */
   private isResetOrCancelButton(element: HTMLElement): boolean {
     const searchText = this.getElementSearchText(element);
@@ -243,12 +271,13 @@ class AutofillInit implements AutofillInitInterface {
       "close",
       "schließen",
       "clear",
+      "dismiss",
     ];
     return cancelKeywords.some((kw) => searchText.includes(kw));
   }
 
   /**
-   * Sammelt durchsuchbaren Text eines Elements (Text, Attribute, Labels).
+   * Sammelt durchsuchbaren Text eines Elements.
    */
   private getElementSearchText(element: HTMLElement): string {
     return [
@@ -267,32 +296,56 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Findet das Element aus der Liste das dem Referenz-Element am nächsten ist (DOM-Distanz).
+   * Findet das nächste klickbare Element (cursor:pointer) in der Nähe des
+   * Referenz-Elements. Für Frameworks wie ExtJS die keine Standard-Buttons nutzen.
    */
-  private findClosestElement(
-    reference: HTMLElement,
-    candidates: HTMLElement[],
-  ): HTMLElement | null {
-    if (!candidates.length) {
-      return null;
-    }
-
+  private findNearestPointerElement(reference: HTMLElement): HTMLElement | null {
     const refRect = reference.getBoundingClientRect();
     let closest: HTMLElement | null = null;
     let minDistance = Infinity;
 
-    for (const candidate of candidates) {
-      // Cancel/Reset-Buttons überspringen
-      if (this.isResetOrCancelButton(candidate)) {
+    // Alle sichtbaren Elemente mit cursor:pointer finden
+    const candidates = document.querySelectorAll<HTMLElement>("*");
+    for (const el of Array.from(candidates)) {
+      // Nur Elemente die wie Buttons aussehen
+      if (el.contains(reference) || el === reference) {
         continue;
       }
-      const rect = candidate.getBoundingClientRect();
+      if (el.querySelector("input, select, textarea")) {
+        continue;
+      }
+
+      const style = globalThis.getComputedStyle(el);
+      if (style.cursor !== "pointer") {
+        continue;
+      }
+
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 20 || rect.height < 20 || rect.width > 500) {
+        continue;
+      }
+      if (!this.isElementVisible(el)) {
+        continue;
+      }
+      if (this.isResetOrCancelButton(el)) {
+        continue;
+      }
+
+      // Nur Elemente die Submit-Keywords haben ODER der einzige Button-ähnliche Kandidat sind
+      const hasKeyword = this.isSubmitElement(el);
+      const text = el.textContent?.trim();
+      if (!hasKeyword && (!text || text.length > 30)) {
+        continue;
+      }
+
       const distance = Math.sqrt(
         Math.pow(rect.left - refRect.left, 2) + Math.pow(rect.top - refRect.top, 2),
       );
-      if (distance < minDistance) {
-        minDistance = distance;
-        closest = candidate;
+      // Bonus für Elemente mit Submit-Keywords
+      const adjustedDistance = hasKeyword ? distance * 0.3 : distance;
+      if (adjustedDistance < minDistance) {
+        minDistance = adjustedDistance;
+        closest = el;
       }
     }
     return closest;
