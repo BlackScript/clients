@@ -1,6 +1,6 @@
 import { BrowserApi } from "../../platform/browser/browser-api";
 
-interface TabCipherSession {
+export interface TabCipherSession {
   cipherId: string;
   uri: string;
   timestamp: number;
@@ -10,10 +10,27 @@ interface TabCipherSession {
 const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 Minuten
 
 export class TabSessionCipherService {
+  private static _instance: TabSessionCipherService;
   private sessions = new Map<number, TabCipherSession>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
+  private initialized = false;
+
+  /**
+   * Singleton-Instanz holen (wird von overlay.background.ts und autofill.service.ts geteilt)
+   */
+  static getInstance(): TabSessionCipherService {
+    if (!TabSessionCipherService._instance) {
+      TabSessionCipherService._instance = new TabSessionCipherService();
+    }
+    return TabSessionCipherService._instance;
+  }
 
   init(): void {
+    if (this.initialized) {
+      return;
+    }
+    this.initialized = true;
+
     // Tab-Close → Session löschen
     BrowserApi.addListener(chrome.tabs.onRemoved, (tabId: number) => {
       this.clearSession(tabId);
