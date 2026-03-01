@@ -1010,10 +1010,69 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     const pageDetailsMap = this.pageDetailsForTab[sender.tab.id];
     if (!pageDetailsMap) {
       this.pageDetailsForTab[sender.tab.id] = new Map([[sender.frameId, pageDetails]]);
+    } else {
+      pageDetailsMap.set(sender.frameId, pageDetails);
+    }
+
+    // Proaktives Autofill bei mehrstufigen Logins: wenn eine Tab-Session existiert,
+    // automatisch den gespeicherten Cipher füllen (z.B. TOTP nach Login)
+    this.tryAutoFillFromTabSession(sender.tab).catch((error) =>
+      this.logService.error("Tab-Session Autofill fehlgeschlagen", error),
+    );
+  }
+
+  /**
+   * Prüft ob eine Tab-Session existiert und füllt automatisch den gespeicherten Cipher.
+   * Wird nach dem Speichern der PageDetails aufgerufen, um bei mehrstufigen Logins
+   * (z.B. Login → TOTP) den nächsten Schritt automatisch auszufüllen.
+   */
+  private async tryAutoFillFromTabSession(tab: chrome.tabs.Tab) {
+    if (!tab?.id || !tab?.url) {
       return;
     }
 
-    pageDetailsMap.set(sender.frameId, pageDetails);
+    const tabSession = this.tabSessionCipherService.getSession(tab.id, tab.url);
+    if (!tabSession) {
+      return;
+    }
+
+    const activeUserId = await firstValueFrom(
+      this.accountService.activeAccount$.pipe(getOptionalUserId),
+    );
+    if (activeUserId == null) {
+      return;
+    }
+
+    const sessionCiphers = await this.cipherService.getAllDecryptedForIds(activeUserId, [
+      tabSession.cipherId,
+    ]);
+    if (!sessionCiphers?.length) {
+      return;
+    }
+
+    const cipher = sessionCiphers[0];
+    const pageDetailsMap = this.pageDetailsForTab[tab.id];
+    if (!pageDetailsMap?.size) {
+      return;
+    }
+
+    const pageDetailsList: PageDetail[] = Array.from(pageDetailsMap.values());
+
+    const totpCode = await this.autofillService.doAutoFill({
+      tab,
+      cipher,
+      pageDetails: pageDetailsList,
+      skipLastUsed: true,
+      skipUsernameOnlyFill: false,
+      onlyEmptyFields: true,
+      fillNewPassword: false,
+      allowUntrustedIframe: false,
+      allowTotpAutofill: true,
+    });
+
+    if (totpCode) {
+      this.platformUtilsService.copyToClipboard(totpCode);
+    }
   }
 
   /**
