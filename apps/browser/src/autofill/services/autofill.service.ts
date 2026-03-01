@@ -574,6 +574,11 @@ export default class AutofillService implements AutofillServiceInterface {
       return null;
     }
 
+    // TOTP auch bei Page-Load-Autofill direkt ins Feld füllen, wenn das Setting aktiv ist
+    const allowTotpOnPageLoad = !fromCommand
+      ? await firstValueFrom(this.autofillSettingsService.autoFillTotpOnPageLoad$)
+      : false;
+
     const totpCode = await this.doAutoFill({
       tab: tab,
       cipher: cipher,
@@ -583,7 +588,7 @@ export default class AutofillService implements AutofillServiceInterface {
       onlyEmptyFields: !fromCommand,
       fillNewPassword: fromCommand,
       allowUntrustedIframe: fromCommand,
-      allowTotpAutofill: fromCommand,
+      allowTotpAutofill: fromCommand || allowTotpOnPageLoad,
       autoSubmitLogin,
     });
 

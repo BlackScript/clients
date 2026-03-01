@@ -58,6 +58,15 @@ const AUTO_COPY_TOTP = new UserKeyDefinition(AUTOFILL_SETTINGS_DISK, "autoCopyTo
   clearOn: [],
 });
 
+const AUTO_FILL_TOTP_ON_PAGE_LOAD = new UserKeyDefinition(
+  AUTOFILL_SETTINGS_DISK,
+  "autoFillTotpOnPageLoad",
+  {
+    deserializer: (value: boolean) => value ?? true,
+    clearOn: [],
+  },
+);
+
 const INLINE_MENU_VISIBILITY = new KeyDefinition(
   AUTOFILL_SETTINGS_DISK_LOCAL,
   "inlineMenuVisibility",
@@ -81,6 +90,19 @@ const SHOW_INLINE_MENU_CARDS = new UserKeyDefinition(
   {
     deserializer: (value: boolean) => value ?? true,
     clearOn: [],
+  },
+);
+
+export interface InlineMenuSiteOverride {
+  hostname: string;
+  visibility: InlineMenuVisibilitySetting;
+}
+
+const INLINE_MENU_SITE_OVERRIDES = new KeyDefinition<InlineMenuSiteOverride[]>(
+  AUTOFILL_SETTINGS_DISK_LOCAL,
+  "inlineMenuSiteOverrides",
+  {
+    deserializer: (value: InlineMenuSiteOverride[]) => value ?? [],
   },
 );
 
@@ -109,12 +131,16 @@ export abstract class AutofillSettingsServiceAbstraction {
   autofillOnPageLoadPolicyToastHasDisplayed$: Observable<boolean>;
   autoCopyTotp$: Observable<boolean>;
   setAutoCopyTotp: (newValue: boolean) => Promise<void>;
+  autoFillTotpOnPageLoad$: Observable<boolean>;
+  setAutoFillTotpOnPageLoad: (newValue: boolean) => Promise<void>;
   inlineMenuVisibility$: Observable<InlineMenuVisibilitySetting>;
   setInlineMenuVisibility: (newValue: InlineMenuVisibilitySetting) => Promise<void>;
   showInlineMenuIdentities$: Observable<boolean>;
   setShowInlineMenuIdentities: (newValue: boolean) => Promise<void>;
   showInlineMenuCards$: Observable<boolean>;
   setShowInlineMenuCards: (newValue: boolean) => Promise<void>;
+  inlineMenuSiteOverrides$: Observable<InlineMenuSiteOverride[]>;
+  setInlineMenuSiteOverrides: (newValue: InlineMenuSiteOverride[]) => Promise<void>;
   enableContextMenu$: Observable<boolean>;
   setEnableContextMenu: (newValue: boolean) => Promise<void>;
   clearClipboardDelay$: Observable<ClearClipboardDelaySetting>;
@@ -139,6 +165,9 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
   private autoCopyTotpState: ActiveUserState<boolean>;
   readonly autoCopyTotp$: Observable<boolean>;
 
+  private autoFillTotpOnPageLoadState: ActiveUserState<boolean>;
+  readonly autoFillTotpOnPageLoad$: Observable<boolean>;
+
   private inlineMenuVisibilityState: GlobalState<InlineMenuVisibilitySetting>;
   readonly inlineMenuVisibility$: Observable<InlineMenuVisibilitySetting>;
 
@@ -147,6 +176,9 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
 
   private showInlineMenuCardsState: ActiveUserState<boolean>;
   readonly showInlineMenuCards$: Observable<boolean>;
+
+  private inlineMenuSiteOverridesState: GlobalState<InlineMenuSiteOverride[]>;
+  readonly inlineMenuSiteOverrides$: Observable<InlineMenuSiteOverride[]>;
 
   private enableContextMenuState: GlobalState<boolean>;
   readonly enableContextMenu$: Observable<boolean>;
@@ -192,6 +224,11 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
     this.autoCopyTotpState = this.stateProvider.getActive(AUTO_COPY_TOTP);
     this.autoCopyTotp$ = this.autoCopyTotpState.state$.pipe(map((x) => x ?? true));
 
+    this.autoFillTotpOnPageLoadState = this.stateProvider.getActive(AUTO_FILL_TOTP_ON_PAGE_LOAD);
+    this.autoFillTotpOnPageLoad$ = this.autoFillTotpOnPageLoadState.state$.pipe(
+      map((x) => x ?? true),
+    );
+
     this.inlineMenuVisibilityState = this.stateProvider.getGlobal(INLINE_MENU_VISIBILITY);
     this.inlineMenuVisibility$ = this.inlineMenuVisibilityState.state$.pipe(
       map((x) => x ?? AutofillOverlayVisibility.Off),
@@ -212,6 +249,11 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
           // If enabled, show cards inline menu unless card type is restricted
           enabled && !restrictions.some((r) => r.cipherType === CipherType.Card),
       ),
+    );
+
+    this.inlineMenuSiteOverridesState = this.stateProvider.getGlobal(INLINE_MENU_SITE_OVERRIDES);
+    this.inlineMenuSiteOverrides$ = this.inlineMenuSiteOverridesState.state$.pipe(
+      map((x) => x ?? []),
     );
 
     this.enableContextMenuState = this.stateProvider.getGlobal(ENABLE_CONTEXT_MENU);
@@ -243,6 +285,10 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
     await this.autoCopyTotpState.update(() => newValue);
   }
 
+  async setAutoFillTotpOnPageLoad(newValue: boolean): Promise<void> {
+    await this.autoFillTotpOnPageLoadState.update(() => newValue);
+  }
+
   async setInlineMenuVisibility(newValue: InlineMenuVisibilitySetting): Promise<void> {
     await this.inlineMenuVisibilityState.update(() => newValue);
   }
@@ -253,6 +299,10 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
 
   async setShowInlineMenuCards(newValue: boolean): Promise<void> {
     await this.showInlineMenuCardsState.update(() => newValue);
+  }
+
+  async setInlineMenuSiteOverrides(newValue: InlineMenuSiteOverride[]): Promise<void> {
+    await this.inlineMenuSiteOverridesState.update(() => newValue);
   }
 
   async setEnableContextMenu(newValue: boolean): Promise<void> {
