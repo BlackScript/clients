@@ -1067,16 +1067,15 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
     const cipher = sessionCiphers[0];
 
-    // Nur TOTP-Felder füllen — Login-Felder (password, username) herausfiltern.
+    // NUR TOTP-Felder behalten — alle anderen (Password, Username, Hidden) rausfiltern.
     // Bei Proxmox (ExtJS) überschreibt das erneute Füllen des Passwort-Felds
     // das intern gespeicherte TFA-Challenge-Ticket → TOTP-Prüfung schlägt fehl.
+    // Auch Username-Felder dürfen nicht erneut gefüllt werden (können ExtJS-State stören).
     const totpOnlyPageDetails: PageDetail[] = pageDetailsList.map((pd) => ({
       ...pd,
       details: {
         ...pd.details,
-        fields: (pd.details?.fields || []).filter(
-          (f) => f.type !== "password" && f.type !== "hidden",
-        ),
+        fields: (pd.details?.fields || []).filter((f) => this.isTotpLikeField(f)),
       },
     }));
 
@@ -1085,7 +1084,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       cipher,
       pageDetails: totpOnlyPageDetails,
       skipLastUsed: true,
-      skipUsernameOnlyFill: false,
+      skipUsernameOnlyFill: true,
       onlyEmptyFields: true,
       fillNewPassword: false,
       allowUntrustedIframe: false,
@@ -1163,6 +1162,64 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       }
     }
     return false;
+  }
+
+  /**
+   * Prüft ob ein einzelnes Feld TOTP-ähnlich ist (gleiche Logik wie pageHasTotpFields).
+   * Wird verwendet um PageDetails auf reine TOTP-Felder zu filtern.
+   */
+  private isTotpLikeField(field: AutofillField): boolean {
+    if (!field.viewable) {
+      return false;
+    }
+    if (!["text", "number", "tel"].includes(field.type)) {
+      return false;
+    }
+
+    if (field.autoCompleteType === "one-time-code") {
+      return true;
+    }
+
+    const totpKeywords = [
+      "totp",
+      "totpcode",
+      "2facode",
+      "mfacode",
+      "otp",
+      "otpcode",
+      "onetimecode",
+      "onetimepassword",
+      "one-time-code",
+      "twofactor",
+      "twofa",
+      "2fa",
+      "mfa",
+      "security_code",
+      "second-factor",
+      "verification",
+      "verify",
+      "code",
+      "pin",
+      "token",
+    ];
+
+    const fieldAttrs = [
+      field.opid,
+      field.htmlID,
+      field.htmlName,
+      field.placeholder,
+      field["label-left"],
+      field["label-right"],
+      field["label-top"],
+      field["label-tag"],
+      field["label-aria"],
+      field.autoCompleteType,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return totpKeywords.some((kw) => fieldAttrs.includes(kw));
   }
 
   /**
