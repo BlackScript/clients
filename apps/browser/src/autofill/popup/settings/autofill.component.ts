@@ -36,7 +36,10 @@ import {
   ClearClipboardDelay,
   DisablePasswordManagerUris,
 } from "@bitwarden/common/autofill/constants";
-import { AutofillSettingsServiceAbstraction } from "@bitwarden/common/autofill/services/autofill-settings.service";
+import {
+  AutofillSettingsServiceAbstraction,
+  InlineMenuSiteOverride,
+} from "@bitwarden/common/autofill/services/autofill-settings.service";
 import { DomainSettingsService } from "@bitwarden/common/autofill/services/domain-settings.service";
 import {
   BrowserClientVendor,
@@ -139,6 +142,7 @@ export class AutofillComponent implements OnInit {
   protected additionalOptionsForm = new FormGroup({
     enableContextMenuItem: new FormControl(),
     enableAutoTotpCopy: new FormControl(),
+    enableAutoFillTotpOnPageLoad: new FormControl(),
     clearClipboard: new FormControl(),
     defaultUriMatch: new FormControl(),
   });
@@ -155,6 +159,7 @@ export class AutofillComponent implements OnInit {
   autofillOnPageLoadOptions: { name: string; value: boolean }[];
   enableContextMenuItem: boolean = false;
   enableAutoTotpCopy: boolean = false;
+  enableAutoFillTotpOnPageLoad: boolean = true;
   /** Non-null asserted. */
   clearClipboard!: ClearClipboardDelaySetting;
   clearClipboardOptions: { name: string; value: ClearClipboardDelaySetting }[];
@@ -162,6 +167,8 @@ export class AutofillComponent implements OnInit {
   uriMatchOptions: { name: string; value: UriMatchStrategySetting; disabled?: boolean }[];
   showCardsCurrentTab: boolean = true;
   showIdentitiesCurrentTab: boolean = true;
+  inlineMenuSiteOverrides: InlineMenuSiteOverride[] = [];
+  currentTabHostname: string = "";
   /** Non-null asserted. */
   autofillKeyboardHelperText!: string;
   accountSwitcherEnabled: boolean = false;
@@ -303,6 +310,15 @@ export class AutofillComponent implements OnInit {
       emitEvent: false,
     });
 
+    this.enableAutoFillTotpOnPageLoad = await firstValueFrom(
+      this.autofillSettingsService.autoFillTotpOnPageLoad$,
+    );
+
+    this.additionalOptionsForm.controls.enableAutoFillTotpOnPageLoad.patchValue(
+      this.enableAutoFillTotpOnPageLoad,
+      { emitEvent: false },
+    );
+
     this.clearClipboard = await firstValueFrom(this.autofillSettingsService.clearClipboardDelay$);
 
     this.additionalOptionsForm.controls.clearClipboard.patchValue(this.clearClipboard, {
@@ -333,6 +349,12 @@ export class AutofillComponent implements OnInit {
         void this.autofillSettingsService.setAutoCopyTotp(value);
       });
 
+    this.additionalOptionsForm.controls.enableAutoFillTotpOnPageLoad.valueChanges
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((value) => {
+        void this.autofillSettingsService.setAutoFillTotpOnPageLoad(value);
+      });
+
     this.additionalOptionsForm.controls.clearClipboard.valueChanges
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe((value) => {
@@ -356,6 +378,19 @@ export class AutofillComponent implements OnInit {
     this.showIdentitiesCurrentTab = await firstValueFrom(
       this.vaultSettingsService.showIdentitiesCurrentTab$,
     );
+
+    // Site-Overrides laden und aktuellen Hostnamen ermitteln
+    this.inlineMenuSiteOverrides = await firstValueFrom(
+      this.autofillSettingsService.inlineMenuSiteOverrides$,
+    );
+    try {
+      const currentTab = await BrowserApi.getTabFromCurrentWindowId();
+      if (currentTab?.url) {
+        this.currentTabHostname = new URL(currentTab.url).hostname;
+      }
+    } catch {
+      // URL-Parsing fehlgeschlagen
+    }
   }
 
   get spotlightButtonIcon() {
@@ -589,6 +624,44 @@ export class AutofillComponent implements OnInit {
 
   async updateShowInlineMenuIdentities() {
     await this.autofillSettingsService.setShowInlineMenuIdentities(this.showInlineMenuIdentities);
+  }
+
+  get currentSiteHasOverride(): boolean {
+    return this.inlineMenuSiteOverrides.some((o) => o.hostname === this.currentTabHostname);
+  }
+
+  async toggleCurrentSiteOverride() {
+    if (!this.currentTabHostname) {
+      return;
+    }
+
+    if (this.currentSiteHasOverride) {
+      // Override entfernen
+      this.inlineMenuSiteOverrides = this.inlineMenuSiteOverrides.filter(
+        (o) => o.hostname !== this.currentTabHostname,
+      );
+    } else {
+      // Override hinzufügen (Inline-Menü für diese Seite deaktivieren)
+      this.inlineMenuSiteOverrides = [
+        ...this.inlineMenuSiteOverrides,
+        { hostname: this.currentTabHostname, visibility: AutofillOverlayVisibility.Off },
+      ];
+    }
+    await this.autofillSettingsService.setInlineMenuSiteOverrides(this.inlineMenuSiteOverrides);
+  }
+
+  async removeSiteOverride(hostname: string) {
+    this.inlineMenuSiteOverrides = this.inlineMenuSiteOverrides.filter(
+      (o) => o.hostname !== hostname,
+    );
+    await this.autofillSettingsService.setInlineMenuSiteOverrides(this.inlineMenuSiteOverrides);
+  }
+
+  async updateSiteOverrideVisibility(hostname: string, visibility: InlineMenuVisibilitySetting) {
+    this.inlineMenuSiteOverrides = this.inlineMenuSiteOverrides.map((o) =>
+      o.hostname === hostname ? { ...o, visibility } : o,
+    );
+    await this.autofillSettingsService.setInlineMenuSiteOverrides(this.inlineMenuSiteOverrides);
   }
 
   getMatchHints() {

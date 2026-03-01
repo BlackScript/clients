@@ -143,6 +143,58 @@
         </bit-form-control>
       </bit-card>
     </bit-section>
+    <bit-section *ngIf="enableInlineMenu">
+      <bit-section-header>
+        <h2 bitTypography="h6">Inline menu site overrides</h2>
+      </bit-section-header>
+      <bit-card>
+        <button
+          *ngIf="currentTabHostname"
+          bitLink
+          type="button"
+          class="tw-mb-3 tw-block"
+          (click)="toggleCurrentSiteOverride()"
+        >
+          {{
+            currentSiteHasOverride
+              ? "Re-enable inline menu for " + currentTabHostname
+              : "Disable inline menu for " + currentTabHostname
+          }}
+        </button>
+        <div *ngIf="inlineMenuSiteOverrides.length > 0">
+          <div
+            *ngFor="let override of inlineMenuSiteOverrides"
+            class="tw-flex tw-items-center tw-justify-between tw-py-1"
+          >
+            <span class="tw-text-sm tw-truncate tw-mr-2">{{ override.hostname }}</span>
+            <div class="tw-flex tw-items-center tw-gap-2">
+              <select
+                class="tw-text-sm tw-border tw-border-solid tw-border-secondary-300 tw-rounded tw-px-1 tw-py-0.5"
+                [ngModel]="override.visibility"
+                (ngModelChange)="updateSiteOverrideVisibility(override.hostname, $event)"
+              >
+                <option [ngValue]="0">Off</option>
+                <option [ngValue]="1">On button click</option>
+                <option [ngValue]="2">On field focus</option>
+              </select>
+              <button
+                bitIconButton="bwi-close"
+                buttonType="muted"
+                size="small"
+                type="button"
+                (click)="removeSiteOverride(override.hostname)"
+              ></button>
+            </div>
+          </div>
+        </div>
+        <p
+          *ngIf="inlineMenuSiteOverrides.length === 0 && !currentTabHostname"
+          class="tw-text-sm tw-text-muted"
+        >
+          No site overrides configured
+        </p>
+      </bit-card>
+    </bit-section>
     <bit-section>
       <bit-section-header>
         <h2 bitTypography="h6">{{ "autofillKeyboardShortcutSectionTitle" | i18n }}</h2>
@@ -233,6 +285,19 @@
           <bit-form-control>
             <input formControlName="enableAutoTotpCopy" bitCheckbox id="totp" type="checkbox" />
             <bit-label for="totp">{{ "enableAutoTotpCopy" | i18n }}</bit-label>
+          </bit-form-control>
+          <bit-form-control>
+            <input
+              formControlName="enableAutoFillTotpOnPageLoad"
+              bitCheckbox
+              id="totpOnPageLoad"
+              type="checkbox"
+            />
+            <bit-label for="totpOnPageLoad">Auto-fill TOTP codes into fields</bit-label>
+            <bit-hint class="tw-text-sm">
+              When enabled, one-time codes are filled directly into input fields instead of only
+              copying to clipboard
+            </bit-hint>
           </bit-form-control>
           <bit-form-field [disableMargin]="isDefaultUriMatchDisabledByPolicy">
             <bit-label for="clearClipboard">{{ "clearClipboard" | i18n }}</bit-label>
