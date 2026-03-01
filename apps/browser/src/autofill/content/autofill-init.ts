@@ -355,6 +355,8 @@ class AutofillInit implements AutofillInitInterface {
 
   /**
    * Sammelt durchsuchbaren Text eines Elements.
+   * Nur semantische Attribute (sichtbarer Text, ARIA, etc.) — KEINE CSS-Klassen,
+   * da diese nach Normalisierung Falschmeldungen erzeugen (z.B. "fa-book" → "fabook" enthält "ok").
    */
   private getElementSearchText(element: HTMLElement): string {
     return [
@@ -364,7 +366,6 @@ class AutofillInit implements AutofillInitInterface {
       element.getAttribute("title"),
       element.getAttribute("id"),
       element.getAttribute("name"),
-      element.getAttribute("class"),
     ]
       .filter(Boolean)
       .join(" ")
