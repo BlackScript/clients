@@ -170,81 +170,82 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Versucht das Formular abzusenden.
+   * Versucht das Formular abzusenden mit Retry-Mechanismus.
+   * Manche Seiten brauchen Zeit bis der Submit-Button enabled wird
+   * (z.B. Backend-Healthcheck, async Validierung). Wir prüfen alle 500ms
+   * ob ein klickbarer Button vorhanden ist (max 3 Sekunden).
+   */
+  private trySubmitForm(attempt = 0) {
+    const maxAttempts = 6; // 6 × 500ms = 3 Sekunden
+    if (attempt > maxAttempts) {
+      return;
+    }
+
+    const clicked = this.findAndClickSubmitButton();
+    if (!clicked && attempt < maxAttempts) {
+      setTimeout(() => this.trySubmitForm(attempt + 1), 500);
+    }
+  }
+
+  /**
+   * Sucht einen Submit-Button und klickt ihn.
+   * Gibt true zurück wenn ein Button gefunden und geklickt wurde.
    *
    * Strategie-Reihenfolge:
-   * 1. Enabled Submit-Button im Formular klicken
-   * 2. Disabled Submit-Button: disabled entfernen → klicken → wiederherstellen
-   * 3. Klickbare Elemente mit Submit-Keywords (ExtJS, Custom UIs)
-   * 4. cursor:pointer Elemente nahe dem gefüllten Feld
+   * 1. Enabled Submit-Button im Formular
+   * 2. Klickbare Elemente mit Submit-Keywords (ExtJS, Custom UIs)
+   * 3. cursor:pointer Elemente nahe dem gefüllten Feld
    */
-  private trySubmitForm() {
+  private findAndClickSubmitButton(): boolean {
     const filledEl = this.lastFilledElement;
     const form = filledEl?.closest("form") as HTMLFormElement;
 
-    // 1. Enabled Submit-Button im Formular
-    if (form) {
-      const enabledBtn = form.querySelector<HTMLElement>(
-        "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])",
-      );
-      if (enabledBtn && this.isElementVisible(enabledBtn)) {
-        this.simulateFullClick(enabledBtn);
-        return;
-      }
+    // 1. Enabled Submit-Button im Formular (oder global)
+    const submitSelector =
+      "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])";
+    const submitBtn =
+      form?.querySelector<HTMLElement>(submitSelector) ||
+      document.querySelector<HTMLElement>(submitSelector);
+    if (submitBtn && this.isElementVisible(submitBtn)) {
+      this.simulateFullClick(submitBtn);
+      return true;
     }
 
-    // 2. Disabled Submit-Button: temporär aktivieren und klicken
-    //    Für Vue/React wo :disabled Binding den Button sperrt obwohl die Werte gefüllt sind
-    if (form) {
-      const disabledBtn = form.querySelector<HTMLElement>(
-        "button[type='submit'][disabled], input[type='submit'][disabled]",
-      );
-      if (disabledBtn && this.isElementVisible(disabledBtn)) {
-        disabledBtn.removeAttribute("disabled");
-        this.simulateFullClick(disabledBtn);
-        return;
-      }
-    }
-
-    // 3. Klickbare Elemente mit Submit-Keywords (ExtJS Buttons, ARIA, Links)
+    // 2. Klickbare Elemente mit Submit-Keywords (ExtJS Buttons, ARIA, Links)
     const clickableSelector =
-      "button:not([disabled]), input[type='submit']:not([disabled]), " +
-      "input[type='button']:not([disabled]), [role='button'], " +
+      "button:not([disabled]), [role='button'], " +
       "a[class*='btn'], a[class*='button'], " +
       "span[class*='btn'], div[class*='btn']";
     const allClickables = document.querySelectorAll<HTMLElement>(clickableSelector);
     for (const el of Array.from(allClickables)) {
       if (this.isSubmitElement(el) && this.isElementVisible(el)) {
         this.simulateFullClick(el);
-        return;
+        return true;
       }
     }
 
-    // 4. cursor:pointer Elemente nahe dem gefüllten Feld (Custom UIs)
+    // 3. cursor:pointer Elemente nahe dem gefüllten Feld (Custom UIs)
     if (filledEl && filledEl !== document.body) {
       const pointerEl = this.findNearestPointerElement(filledEl);
       if (pointerEl) {
         this.simulateFullClick(pointerEl);
+        return true;
       }
     }
+
+    return false;
   }
 
   /**
    * Simuliert einen vollständigen Mausklick (mousedown → mouseup → click).
-   * Nutzt dispatchEvent statt element.click() damit Events auch auf
-   * disabled Elementen feuern. button=0 und detail=1 für Linksklick.
+   * Wichtig: element.click() statt dispatchEvent für den Click, damit die
+   * Browser-Default-Action ausgelöst wird (z.B. Form-Submission bei Submit-Buttons).
    */
   private simulateFullClick(element: HTMLElement) {
-    const eventInit: MouseEventInit = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      button: 0,
-      detail: 1,
-    };
+    const eventInit: MouseEventInit = { bubbles: true, cancelable: true, view: window };
     element.dispatchEvent(new MouseEvent("mousedown", eventInit));
     element.dispatchEvent(new MouseEvent("mouseup", eventInit));
-    element.dispatchEvent(new MouseEvent("click", eventInit));
+    element.click();
   }
 
   /**
