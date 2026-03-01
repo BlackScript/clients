@@ -905,6 +905,7 @@ export const SubmitLoginButtonNames: string[] = [
   "einloggen",
   "weiter",
   "absenden",
+  "bestätigen",
 ];
 
 export const SubmitChangePasswordButtonNames: string[] = [

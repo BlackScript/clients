@@ -253,6 +253,7 @@ class AutofillInit implements AutofillInitInterface {
     }
 
     // 2. Klickbare Elemente mit Submit-Keywords (ExtJS Buttons, ARIA, Links)
+    // Aber: <a>-Elemente mit echtem href (Navigation) ausschließen — nur role="button" zählt
     const clickableSelector =
       "button:not([disabled]), [role='button'], " +
       "a[class*='btn'], a[class*='button'], " +
@@ -261,6 +262,11 @@ class AutofillInit implements AutofillInitInterface {
     // eslint-disable-next-line no-console
     console.log("[BW-DEBUG] findAndClick: clickable Elemente:", allClickables.length);
     for (const el of Array.from(allClickables)) {
+      // <a>-Elemente mit echtem href überspringen (sind Navigations-Links, keine Buttons)
+      // Ausnahme: role="button" (z.B. ExtJS Buttons wie bei Proxmox)
+      if (el.tagName === "A" && this.isNavigationLink(el as HTMLAnchorElement)) {
+        continue;
+      }
       const isSubmit = this.isSubmitElement(el);
       const isVisible = this.isElementVisible(el);
       if (isSubmit) {
@@ -287,9 +293,10 @@ class AutofillInit implements AutofillInitInterface {
       }
     }
 
-    // 3. cursor:pointer Elemente nahe dem gefüllten Feld (Custom UIs)
+    // 3. cursor:pointer Elemente nahe dem gefüllten Feld — NUR mit Submit-Keywords!
+    // Ohne Keywords werden sonst Sidebar-Buttons, Nav-Links etc. geklickt.
     if (filledEl && filledEl !== document.body) {
-      const pointerEl = this.findNearestPointerElement(filledEl);
+      const pointerEl = this.findNearestSubmitPointerElement(filledEl);
       if (pointerEl) {
         // eslint-disable-next-line no-console
         console.log(
@@ -366,22 +373,41 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Findet das nächste klickbare Element (cursor:pointer) in der Nähe des
-   * Referenz-Elements. Für Frameworks wie ExtJS die keine Standard-Buttons nutzen.
+   * Prüft ob ein <a>-Element ein Navigations-Link ist (hat echten href,
+   * ist kein role="button"). Solche Links sollen nicht als Submit-Button geklickt werden.
    */
-  private findNearestPointerElement(reference: HTMLElement): HTMLElement | null {
+  private isNavigationLink(element: HTMLAnchorElement): boolean {
+    if (element.getAttribute("role") === "button") {
+      return false; // ExtJS-Pattern: <a role="button"> ohne href
+    }
+    const href = element.getAttribute("href");
+    if (!href || href === "#" || href.startsWith("javascript:")) {
+      return false; // Kein echter Navigations-Link
+    }
+    return true; // Echte Navigation → nicht als Submit-Button verwenden
+  }
+
+  /**
+   * Findet das nächste klickbare Element (cursor:pointer) mit Submit-Keywords
+   * in der Nähe des Referenz-Elements. Nur Elemente mit expliziten Submit-Keywords
+   * werden berücksichtigt, um versehentliches Klicken von Sidebar-Buttons,
+   * Navigations-Links etc. zu vermeiden.
+   */
+  private findNearestSubmitPointerElement(reference: HTMLElement): HTMLElement | null {
     const refRect = reference.getBoundingClientRect();
     let closest: HTMLElement | null = null;
     let minDistance = Infinity;
 
-    // Alle sichtbaren Elemente mit cursor:pointer finden
     const candidates = document.querySelectorAll<HTMLElement>("*");
     for (const el of Array.from(candidates)) {
-      // Nur Elemente die wie Buttons aussehen
       if (el.contains(reference) || el === reference) {
         continue;
       }
       if (el.querySelector("input, select, textarea")) {
+        continue;
+      }
+      // <a>-Links mit echtem href überspringen
+      if (el.tagName === "A" && this.isNavigationLink(el as HTMLAnchorElement)) {
         continue;
       }
 
@@ -401,20 +427,16 @@ class AutofillInit implements AutofillInitInterface {
         continue;
       }
 
-      // Nur Elemente die Submit-Keywords haben ODER der einzige Button-ähnliche Kandidat sind
-      const hasKeyword = this.isSubmitElement(el);
-      const text = el.textContent?.trim();
-      if (!hasKeyword && (!text || text.length > 30)) {
+      // NUR Elemente mit Submit-Keywords — kein Fallback auf "kurzer Text"
+      if (!this.isSubmitElement(el)) {
         continue;
       }
 
       const distance = Math.sqrt(
         Math.pow(rect.left - refRect.left, 2) + Math.pow(rect.top - refRect.top, 2),
       );
-      // Bonus für Elemente mit Submit-Keywords
-      const adjustedDistance = hasKeyword ? distance * 0.3 : distance;
-      if (adjustedDistance < minDistance) {
-        minDistance = adjustedDistance;
+      if (distance < minDistance) {
+        minDistance = distance;
         closest = el;
       }
     }
