@@ -1067,10 +1067,23 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
     const cipher = sessionCiphers[0];
 
+    // Nur TOTP-Felder füllen — Login-Felder (password, username) herausfiltern.
+    // Bei Proxmox (ExtJS) überschreibt das erneute Füllen des Passwort-Felds
+    // das intern gespeicherte TFA-Challenge-Ticket → TOTP-Prüfung schlägt fehl.
+    const totpOnlyPageDetails: PageDetail[] = pageDetailsList.map((pd) => ({
+      ...pd,
+      details: {
+        ...pd.details,
+        fields: (pd.details?.fields || []).filter(
+          (f) => f.type !== "password" && f.type !== "hidden",
+        ),
+      },
+    }));
+
     const totpCode = await this.autofillService.doAutoFill({
       tab,
       cipher,
-      pageDetails: pageDetailsList,
+      pageDetails: totpOnlyPageDetails,
       skipLastUsed: true,
       skipUsernameOnlyFill: false,
       onlyEmptyFields: true,
