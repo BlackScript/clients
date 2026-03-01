@@ -139,8 +139,21 @@ class AutofillInit implements AutofillInitInterface {
     });
     await this.insertAutofillContentService.fillForm(fillScript);
 
-    // Sofort nach dem Fill das aktive Element merken (bevor Animation-Klasse entfernt wird)
-    this.lastFilledElement = document.activeElement as HTMLElement;
+    // Gefülltes Element merken — activeElement ist nach dem Fill idealerweise das letzte Feld.
+    // Falls activeElement body ist (z.B. nach Blur), Fallback über gefüllte Passwort-Felder.
+    const activeEl = document.activeElement as HTMLElement;
+    if (activeEl && activeEl !== document.body) {
+      this.lastFilledElement = activeEl;
+    } else {
+      // Fallback: letztes sichtbares Passwort- oder Text-Input mit Wert finden
+      const filledInputs = document.querySelectorAll<HTMLInputElement>(
+        "input[type='password'], input[type='text'], input[type='email']",
+      );
+      const lastFilled = Array.from(filledInputs)
+        .reverse()
+        .find((el) => el.value && this.isElementVisible(el));
+      this.lastFilledElement = lastFilled || activeEl;
+    }
 
     setTimeout(
       () =>
@@ -159,35 +172,19 @@ class AutofillInit implements AutofillInitInterface {
   /**
    * Versucht das Formular abzusenden.
    *
-   * Strategie (Reihenfolge):
-   * 1. form.requestSubmit() — zuverlässigste Methode, funktioniert mit
-   *    Vue/React/Angular (@submit.prevent etc.), auch wenn Button disabled ist
-   * 2. Nicht-disabled type="submit" Button klicken
-   * 3. Klickbare Elemente mit Submit-Keywords suchen (Text, Attribute)
+   * Strategie (Reihenfolge) — Button-Klick zuerst, requestSubmit als Fallback:
+   * 1. Submit-Button im Formular suchen und klicken (zuverlässigste Methode)
+   * 2. Globaler Submit-Button (falls Formular-Suche fehlschlägt)
+   * 3. Klickbare Elemente mit Submit-Keywords (Text, Attribute, ARIA)
    * 4. cursor:pointer Elemente nahe dem gefüllten Feld (für ExtJS etc.)
-   * 5. Einziger sichtbarer nicht-Cancel-Button → klicken
+   * 5. form.requestSubmit() — für Fälle wo der Button disabled ist aber
+   *    das Framework den Submit-Event handelt (Vue @submit.prevent etc.)
+   * 6. Einziger sichtbarer nicht-Cancel-Button als Notfall
+   * 7. form.submit() als absolut letzter Fallback
    */
   private trySubmitForm() {
     const filledEl = this.lastFilledElement;
     const form = filledEl?.closest("form") as HTMLFormElement;
-
-    // 1. form.requestSubmit() — beste Methode für Vue/React/Angular
-    // Triggert den submit-Event den Frameworks wie Vue über @submit.prevent abfangen
-    if (form) {
-      try {
-        form.requestSubmit();
-        return;
-      } catch {
-        // requestSubmit kann fehlschlagen wenn der einzige Submit-Button disabled ist
-        // In dem Fall weiter zu den Button-Strategien
-        try {
-          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-          return;
-        } catch {
-          // Weiter zur Button-Suche
-        }
-      }
-    }
 
     // Selektor für klickbare Elemente (breit: Standard + Frameworks wie ExtJS)
     const clickableSelector =
@@ -196,16 +193,40 @@ class AutofillInit implements AutofillInitInterface {
       "a.btn, a[class*='button'], a[class*='btn'], " +
       "span[class*='btn'], div[class*='btn']";
 
-    // 2. Nicht-disabled type="submit" Button
-    const submitBtn = document.querySelector<HTMLElement>(
+    // 1. Submit-Button innerhalb des Formulars suchen und klicken
+    if (form) {
+      const formSubmitBtn = form.querySelector<HTMLElement>(
+        "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])",
+      );
+      if (formSubmitBtn && this.isElementVisible(formSubmitBtn)) {
+        this.simulateFullClick(formSubmitBtn);
+        return;
+      }
+
+      // Auch Buttons ohne expliziten type (default ist submit in einem <form>)
+      const defaultBtn = form.querySelector<HTMLButtonElement>(
+        "button:not([type]):not([disabled])",
+      );
+      if (
+        defaultBtn &&
+        this.isElementVisible(defaultBtn) &&
+        !this.isResetOrCancelButton(defaultBtn)
+      ) {
+        this.simulateFullClick(defaultBtn);
+        return;
+      }
+    }
+
+    // 2. Globaler Submit-Button (außerhalb des Formulars oder kein Formular gefunden)
+    const globalSubmitBtn = document.querySelector<HTMLElement>(
       "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])",
     );
-    if (submitBtn && this.isElementVisible(submitBtn)) {
-      this.simulateFullClick(submitBtn);
+    if (globalSubmitBtn && this.isElementVisible(globalSubmitBtn)) {
+      this.simulateFullClick(globalSubmitBtn);
       return;
     }
 
-    // 3. Klickbare Elemente mit Submit-Keywords
+    // 3. Klickbare Elemente mit Submit-Keywords (Text, ARIA-Label, Klassen etc.)
     const allClickables = document.querySelectorAll<HTMLElement>(clickableSelector);
     for (const el of Array.from(allClickables)) {
       if (this.isSubmitElement(el) && this.isElementVisible(el)) {
@@ -223,7 +244,25 @@ class AutofillInit implements AutofillInitInterface {
       }
     }
 
-    // 5. Einziger sichtbarer nicht-Cancel-Button auf der Seite
+    // 5. form.requestSubmit() — für Frameworks die den Submit-Event handeln
+    //    auch wenn der Button noch disabled ist (z.B. Vue :disabled Binding)
+    if (form) {
+      try {
+        form.requestSubmit();
+        return;
+      } catch {
+        // requestSubmit schlägt fehl wenn Submit-Button disabled ist
+        // Dann manuell den Submit-Event dispatchen
+        try {
+          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+          return;
+        } catch {
+          // Weiter zu Notfall-Strategien
+        }
+      }
+    }
+
+    // 6. Einziger sichtbarer nicht-Cancel-Button als Notfall
     const visibleButtons = Array.from(allClickables).filter(
       (el) => this.isElementVisible(el) && !this.isResetOrCancelButton(el),
     );
@@ -232,7 +271,7 @@ class AutofillInit implements AutofillInitInterface {
       return;
     }
 
-    // 6. Letzter Fallback: form.submit() (ohne Events, direkte Submission)
+    // 7. Letzter Fallback: form.submit() (ohne Events, direkte Submission)
     if (form) {
       form.submit();
     }
