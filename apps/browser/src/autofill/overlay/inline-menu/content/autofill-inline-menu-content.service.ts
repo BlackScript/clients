@@ -672,14 +672,16 @@ export class AutofillInlineMenuContentService implements AutofillInlineMenuConte
       (lastChildIsInlineMenuList && !secondToLastChildIsInlineMenuButton) ||
       (lastChildIsInlineMenuButton && isInlineMenuListVisible)
     ) {
-      if (!this.listElement) {
+      if (!this.listElement || !containerElement.contains(this.listElement)) {
         return;
       }
       containerElement.insertBefore(this.buttonElement, this.listElement);
       return;
     }
 
-    containerElement.insertBefore(lastChild, this.buttonElement);
+    if (containerElement.contains(this.buttonElement)) {
+      containerElement.insertBefore(lastChild, this.buttonElement);
+    }
   };
 
   /**
