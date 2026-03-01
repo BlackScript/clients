@@ -253,6 +253,10 @@ module.exports.buildConfig = function buildConfig(params) {
         __dirname,
         "src/autofill/content/content-message-handler.ts",
       ),
+      "content/quick-access-overlay": path.resolve(
+        __dirname,
+        "src/autofill/content/quick-access-overlay.ts",
+      ),
       "content/fido2-content-script": path.resolve(
         __dirname,
         "src/autofill/fido2/content/fido2-content-script.ts",
