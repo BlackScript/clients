@@ -197,6 +197,14 @@ class AutofillInit implements AutofillInitInterface {
       return;
     }
 
+    // Blur auf dem gefüllten Feld auslösen — zwingt Frameworks wie ExtJS
+    // ihr internes Datenmodell mit dem DOM-Wert zu synchronisieren.
+    // Ohne Blur liest ExtJS ggf. den alten (leeren) Wert beim Submit.
+    if (this.lastFilledElement && attempt === 0) {
+      this.lastFilledElement.dispatchEvent(new Event("blur", { bubbles: true }));
+      this.lastFilledElement.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
     // eslint-disable-next-line no-console
     console.log("[BW-DEBUG] trySubmitForm Versuch", attempt);
     const clicked = this.findAndClickSubmitButton();
