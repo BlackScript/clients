@@ -197,12 +197,20 @@ class AutofillInit implements AutofillInitInterface {
       return;
     }
 
-    // Blur auf dem gefüllten Feld auslösen — zwingt Frameworks wie ExtJS
+    // Blur auf ALLEN sichtbaren Eingabefeldern auslösen — zwingt Frameworks wie ExtJS
     // ihr internes Datenmodell mit dem DOM-Wert zu synchronisieren.
-    // Ohne Blur liest ExtJS ggf. den alten (leeren) Wert beim Submit.
-    if (this.lastFilledElement && attempt === 0) {
-      this.lastFilledElement.dispatchEvent(new Event("blur", { bubbles: true }));
-      this.lastFilledElement.dispatchEvent(new Event("change", { bubbles: true }));
+    // lastFilledElement reicht nicht: bei mehrstufigen Logins (z.B. Proxmox)
+    // wird password als letztes Element erfasst, aber das TOTP-Feld braucht auch ein Blur.
+    if (attempt === 0) {
+      const allInputs = document.querySelectorAll<HTMLInputElement>(
+        "input:not([type='hidden']):not([type='checkbox']):not([type='radio'])",
+      );
+      for (const input of Array.from(allInputs)) {
+        if (input.value && this.isElementVisible(input)) {
+          input.dispatchEvent(new Event("blur", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
     }
 
     // eslint-disable-next-line no-console
