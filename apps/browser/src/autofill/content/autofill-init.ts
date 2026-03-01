@@ -6,9 +6,10 @@ import { OverlayNotificationsContentService } from "../overlay/notifications/abs
 import { AutofillOverlayContentService } from "../services/abstractions/autofill-overlay-content.service";
 import { DomElementVisibilityService } from "../services/abstractions/dom-element-visibility.service";
 import { DomQueryService } from "../services/abstractions/dom-query.service";
+import { SubmitLoginButtonNames } from "../services/autofill-constants";
 import { CollectAutofillContentService } from "../services/collect-autofill-content.service";
 import InsertAutofillContentService from "../services/insert-autofill-content.service";
-import { sendExtensionMessage } from "../utils";
+import { getSubmitButtonKeywordsSet, sendExtensionMessage } from "../utils";
 
 import {
   AutofillExtensionMessage,
@@ -122,7 +123,11 @@ class AutofillInit implements AutofillInitInterface {
    *
    * @param {AutofillExtensionMessage} message
    */
-  private async fillForm({ fillScript, pageDetailsUrl }: AutofillExtensionMessage) {
+  private async fillForm({
+    fillScript,
+    pageDetailsUrl,
+    autoSubmitAfterFill,
+  }: AutofillExtensionMessage) {
     if ((document.defaultView || window).location.href !== pageDetailsUrl || !fillScript) {
       return;
     }
@@ -140,6 +145,62 @@ class AutofillInit implements AutofillInitInterface {
         }),
       250,
     );
+
+    // Nach dem Füllen automatisch absenden, wenn aktiviert
+    if (autoSubmitAfterFill) {
+      setTimeout(() => this.trySubmitForm(), 300);
+    }
+  }
+
+  /**
+   * Versucht das Formular abzusenden, indem der Submit-Button gesucht und geklickt wird.
+   * Sucht nach type="submit", dann nach Buttons mit Login-Keywords, dann form.submit().
+   */
+  private trySubmitForm() {
+    // Aktives Formular finden (das zuletzt gefüllte Feld gehört dazu)
+    const activeElement = document.activeElement as HTMLElement;
+    const form = activeElement?.closest("form") as HTMLFormElement;
+
+    // Submit-Button im Formular oder Dokument suchen
+    const searchRoot = form || document.body;
+
+    // 1. Expliziten Submit-Button suchen
+    const submitInputs = searchRoot.querySelectorAll<HTMLInputElement>(
+      "input[type='submit'], button[type='submit']",
+    );
+    if (submitInputs.length > 0) {
+      submitInputs[0].click();
+      return;
+    }
+
+    // 2. Buttons mit Login-Keywords suchen
+    const buttons = searchRoot.querySelectorAll<HTMLButtonElement>(
+      "button, [type='button'], [role='button']",
+    );
+    for (const button of Array.from(buttons)) {
+      if (this.isLoginButton(button)) {
+        button.click();
+        return;
+      }
+    }
+
+    // 3. Fallback: form.requestSubmit() oder form.submit()
+    if (form) {
+      if (form.requestSubmit) {
+        form.requestSubmit();
+      } else {
+        form.submit();
+      }
+    }
+  }
+
+  /**
+   * Prüft ob ein Button ein Login-/Submit-Button ist anhand seiner Attribute.
+   */
+  private isLoginButton(element: HTMLElement): boolean {
+    const keywordsSet = getSubmitButtonKeywordsSet(element);
+    const keywordValues = Array.from(keywordsSet).join(",").toLowerCase();
+    return SubmitLoginButtonNames.some((keyword) => keywordValues.indexOf(keyword) > -1);
   }
 
   /**

@@ -143,6 +143,7 @@ export class AutofillComponent implements OnInit {
     enableContextMenuItem: new FormControl(),
     enableAutoTotpCopy: new FormControl(),
     enableAutoFillTotpOnPageLoad: new FormControl(),
+    enableAutoSubmitAfterFill: new FormControl(),
     clearClipboard: new FormControl(),
     defaultUriMatch: new FormControl(),
   });
@@ -160,6 +161,7 @@ export class AutofillComponent implements OnInit {
   enableContextMenuItem: boolean = false;
   enableAutoTotpCopy: boolean = false;
   enableAutoFillTotpOnPageLoad: boolean = true;
+  enableAutoSubmitAfterFill: boolean = false;
   /** Non-null asserted. */
   clearClipboard!: ClearClipboardDelaySetting;
   clearClipboardOptions: { name: string; value: ClearClipboardDelaySetting }[];
@@ -319,6 +321,15 @@ export class AutofillComponent implements OnInit {
       { emitEvent: false },
     );
 
+    this.enableAutoSubmitAfterFill = await firstValueFrom(
+      this.autofillSettingsService.autoSubmitAfterFill$,
+    );
+
+    this.additionalOptionsForm.controls.enableAutoSubmitAfterFill.patchValue(
+      this.enableAutoSubmitAfterFill,
+      { emitEvent: false },
+    );
+
     this.clearClipboard = await firstValueFrom(this.autofillSettingsService.clearClipboardDelay$);
 
     this.additionalOptionsForm.controls.clearClipboard.patchValue(this.clearClipboard, {
@@ -353,6 +364,12 @@ export class AutofillComponent implements OnInit {
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe((value) => {
         void this.autofillSettingsService.setAutoFillTotpOnPageLoad(value);
+      });
+
+    this.additionalOptionsForm.controls.enableAutoSubmitAfterFill.valueChanges
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((value) => {
+        void this.autofillSettingsService.setAutoSubmitAfterFill(value);
       });
 
     this.additionalOptionsForm.controls.clearClipboard.valueChanges

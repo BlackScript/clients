@@ -52,6 +52,7 @@ import { ScriptInjectorService } from "../../platform/services/abstractions/scri
 // eslint-disable-next-line no-restricted-imports
 import { openVaultItemPasswordRepromptPopout } from "../../vault/popup/utils/vault-popout-window";
 import { AutofillMessageCommand, AutofillMessageSender } from "../enums/autofill-message.enums";
+import { TabSessionCipherService } from "./tab-session-cipher.service";
 import { InlineMenuFillTypes } from "../enums/autofill-overlay.enum";
 import { AutofillPort } from "../enums/autofill-port.enum";
 import AutofillField from "../models/autofill-field";
@@ -477,6 +478,11 @@ export default class AutofillService implements AutofillServiceInterface {
           await this.cipherService.updateLastUsedDate(options.cipher.id, activeAccount.id);
         }
 
+        // Auto-Submit-Setting prüfen (nur wenn nicht bereits Enterprise-AutoSubmit aktiv)
+        const shouldAutoSubmit =
+          !options.autoSubmitLogin &&
+          (await firstValueFrom(this.autofillSettingsService.autoSubmitAfterFill$));
+
         void BrowserApi.tabSendMessage(
           tab,
           {
@@ -484,6 +490,7 @@ export default class AutofillService implements AutofillServiceInterface {
             fillScript: fillScript,
             url: tab.url,
             pageDetailsUrl: pd.details.url,
+            autoSubmitAfterFill: shouldAutoSubmit,
           },
           { frameId: pd.frameId },
         );
@@ -536,6 +543,7 @@ export default class AutofillService implements AutofillServiceInterface {
     autoSubmitLogin = false,
   ): Promise<string | null> {
     let cipher: CipherView;
+    let fromTabSession = false;
 
     const activeUserId = await firstValueFrom(
       this.accountService.activeAccount$.pipe(getOptionalUserId),
@@ -544,21 +552,42 @@ export default class AutofillService implements AutofillServiceInterface {
       return null;
     }
 
-    if (fromCommand) {
-      cipher = await this.cipherService.getNextCipherForUrl(tab.url, activeUserId);
-    } else {
-      const lastLaunchedCipher = await this.cipherService.getLastLaunchedForUrl(
-        tab.url,
+    // Tab-Session prüfen: bei mehrstufigen Logins den gespeicherten Cipher verwenden
+    const tabSessionService = TabSessionCipherService.getInstance();
+    const tabSession =
+      tab.id != null && tab.url
+        ? tabSessionService.getSession(tab.id, tab.url)
+        : null;
+
+    if (tabSession && !fromCommand) {
+      // Cipher aus Tab-Session laden (z.B. für TOTP nach Login)
+      const sessionCiphers = await this.cipherService.getAllDecryptedForIds(
         activeUserId,
-        true,
+        [tabSession.cipherId],
       );
-      if (
-        lastLaunchedCipher &&
-        Date.now().valueOf() - lastLaunchedCipher.localData?.lastLaunched?.valueOf() < 30000
-      ) {
-        cipher = lastLaunchedCipher;
+      if (sessionCiphers?.length) {
+        cipher = sessionCiphers[0];
+        fromTabSession = true;
+      }
+    }
+
+    if (!cipher) {
+      if (fromCommand) {
+        cipher = await this.cipherService.getNextCipherForUrl(tab.url, activeUserId);
       } else {
-        cipher = await this.cipherService.getLastUsedForUrl(tab.url, activeUserId, true);
+        const lastLaunchedCipher = await this.cipherService.getLastLaunchedForUrl(
+          tab.url,
+          activeUserId,
+          true,
+        );
+        if (
+          lastLaunchedCipher &&
+          Date.now().valueOf() - lastLaunchedCipher.localData?.lastLaunched?.valueOf() < 30000
+        ) {
+          cipher = lastLaunchedCipher;
+        } else {
+          cipher = await this.cipherService.getLastUsedForUrl(tab.url, activeUserId, true);
+        }
       }
     }
 
@@ -574,23 +603,30 @@ export default class AutofillService implements AutofillServiceInterface {
       return null;
     }
 
-    // TOTP auch bei Page-Load-Autofill direkt ins Feld füllen, wenn das Setting aktiv ist
-    const allowTotpOnPageLoad = !fromCommand
-      ? await firstValueFrom(this.autofillSettingsService.autoFillTotpOnPageLoad$)
-      : false;
+    // TOTP: bei Tab-Session immer erlauben (mehrstufiger Flow), sonst Setting prüfen
+    const allowTotpOnPageLoad = fromTabSession
+      ? true
+      : !fromCommand
+        ? await firstValueFrom(this.autofillSettingsService.autoFillTotpOnPageLoad$)
+        : false;
 
     const totpCode = await this.doAutoFill({
       tab: tab,
       cipher: cipher,
       pageDetails: pageDetails,
       skipLastUsed: !fromCommand,
-      skipUsernameOnlyFill: !fromCommand,
+      skipUsernameOnlyFill: fromTabSession ? false : !fromCommand,
       onlyEmptyFields: !fromCommand,
       fillNewPassword: fromCommand,
       allowUntrustedIframe: fromCommand,
       allowTotpAutofill: fromCommand || allowTotpOnPageLoad,
       autoSubmitLogin,
     });
+
+    // Bei Tab-Session: Session aktualisieren für den nächsten Schritt
+    if (totpCode && tab.id != null && tab.url && cipher?.id) {
+      tabSessionService.setSession(tab.id, cipher.id, tab.url);
+    }
 
     // Update last used index as autofill has succeeded
     if (fromCommand) {

@@ -67,6 +67,15 @@ const AUTO_FILL_TOTP_ON_PAGE_LOAD = new UserKeyDefinition(
   },
 );
 
+const AUTO_SUBMIT_AFTER_FILL = new UserKeyDefinition(
+  AUTOFILL_SETTINGS_DISK,
+  "autoSubmitAfterFill",
+  {
+    deserializer: (value: boolean) => value ?? false,
+    clearOn: [],
+  },
+);
+
 const INLINE_MENU_VISIBILITY = new KeyDefinition(
   AUTOFILL_SETTINGS_DISK_LOCAL,
   "inlineMenuVisibility",
@@ -133,6 +142,8 @@ export abstract class AutofillSettingsServiceAbstraction {
   setAutoCopyTotp: (newValue: boolean) => Promise<void>;
   autoFillTotpOnPageLoad$: Observable<boolean>;
   setAutoFillTotpOnPageLoad: (newValue: boolean) => Promise<void>;
+  autoSubmitAfterFill$: Observable<boolean>;
+  setAutoSubmitAfterFill: (newValue: boolean) => Promise<void>;
   inlineMenuVisibility$: Observable<InlineMenuVisibilitySetting>;
   setInlineMenuVisibility: (newValue: InlineMenuVisibilitySetting) => Promise<void>;
   showInlineMenuIdentities$: Observable<boolean>;
@@ -167,6 +178,9 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
 
   private autoFillTotpOnPageLoadState: ActiveUserState<boolean>;
   readonly autoFillTotpOnPageLoad$: Observable<boolean>;
+
+  private autoSubmitAfterFillState: ActiveUserState<boolean>;
+  readonly autoSubmitAfterFill$: Observable<boolean>;
 
   private inlineMenuVisibilityState: GlobalState<InlineMenuVisibilitySetting>;
   readonly inlineMenuVisibility$: Observable<InlineMenuVisibilitySetting>;
@@ -229,6 +243,11 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
       map((x) => x ?? true),
     );
 
+    this.autoSubmitAfterFillState = this.stateProvider.getActive(AUTO_SUBMIT_AFTER_FILL);
+    this.autoSubmitAfterFill$ = this.autoSubmitAfterFillState.state$.pipe(
+      map((x) => x ?? false),
+    );
+
     this.inlineMenuVisibilityState = this.stateProvider.getGlobal(INLINE_MENU_VISIBILITY);
     this.inlineMenuVisibility$ = this.inlineMenuVisibilityState.state$.pipe(
       map((x) => x ?? AutofillOverlayVisibility.Off),
@@ -287,6 +306,10 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
 
   async setAutoFillTotpOnPageLoad(newValue: boolean): Promise<void> {
     await this.autoFillTotpOnPageLoadState.update(() => newValue);
+  }
+
+  async setAutoSubmitAfterFill(newValue: boolean): Promise<void> {
+    await this.autoSubmitAfterFillState.update(() => newValue);
   }
 
   async setInlineMenuVisibility(newValue: InlineMenuVisibilitySetting): Promise<void> {

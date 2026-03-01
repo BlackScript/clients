@@ -293,10 +293,24 @@
               id="totpOnPageLoad"
               type="checkbox"
             />
-            <bit-label for="totpOnPageLoad">Auto-fill TOTP codes into fields</bit-label>
+            <bit-label for="totpOnPageLoad">TOTP-Codes direkt in Felder einfügen</bit-label>
             <bit-hint class="tw-text-sm">
-              When enabled, one-time codes are filled directly into input fields instead of only
-              copying to clipboard
+              Wenn aktiviert, werden Einmalcodes direkt in Eingabefelder eingefügt statt nur in die
+              Zwischenablage kopiert
+            </bit-hint>
+          </bit-form-control>
+          <bit-form-control>
+            <input
+              formControlName="enableAutoSubmitAfterFill"
+              bitCheckbox
+              id="autoSubmitAfterFill"
+              type="checkbox"
+            />
+            <bit-label for="autoSubmitAfterFill"
+              >Formular automatisch absenden nach Autofill</bit-label
+            >
+            <bit-hint class="tw-text-sm">
+              Wenn aktiviert, wird das Login-Formular nach dem Ausfüllen automatisch abgesendet
             </bit-hint>
           </bit-form-control>
           <bit-form-field [disableMargin]="isDefaultUriMatchDisabledByPolicy">
