@@ -170,99 +170,48 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Phase 1: Alle Formular-Felder mit input/change/blur Events nachbehandeln.
-   * Frameworks (Vue, React, ExtJS) aktualisieren ihre internen Models erst
-   * wenn die richtigen DOM-Events gefeuert werden. Bitwarden's Fill-Service
-   * dispatcht zwar Events, aber manche Frameworks brauchen zusätzlich blur
-   * oder die Events kommen nicht korrekt an.
+   * Versucht das Formular abzusenden.
    *
-   * Nach der Vorbereitung wird Phase 2 (Button-Klick) zeitversetzt gestartet.
+   * Strategie-Reihenfolge:
+   * 1. Enabled Submit-Button im Formular klicken
+   * 2. Disabled Submit-Button: disabled entfernen → klicken → wiederherstellen
+   * 3. Klickbare Elemente mit Submit-Keywords (ExtJS, Custom UIs)
+   * 4. cursor:pointer Elemente nahe dem gefüllten Feld
    */
   private trySubmitForm() {
     const filledEl = this.lastFilledElement;
     const form = filledEl?.closest("form") as HTMLFormElement;
 
-    // Alle gefüllten Input-Felder im Formular (oder auf der Seite) finden
-    const scope = form || document;
-    const inputs = scope.querySelectorAll<HTMLInputElement>(
-      "input:not([type='hidden']):not([type='checkbox']):not([type='radio']), " +
-        "select, textarea",
-    );
-
-    // Auf jedem Feld mit Wert: input + change Events erneut dispatchen
-    for (const input of Array.from(inputs)) {
-      if (input.value) {
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
+    // 1. Enabled Submit-Button im Formular
+    if (form) {
+      const enabledBtn = form.querySelector<HTMLElement>(
+        "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])",
+      );
+      if (enabledBtn && this.isElementVisible(enabledBtn)) {
+        this.simulateFullClick(enabledBtn);
+        return;
       }
     }
 
-    // Letztes Feld blurren (triggert z.B. ExtJS checkChange)
-    if (filledEl && filledEl !== document.body) {
-      filledEl.dispatchEvent(new Event("change", { bubbles: true }));
-      filledEl.blur();
+    // 2. Disabled Submit-Button: temporär aktivieren und klicken
+    //    Für Vue/React wo :disabled Binding den Button sperrt obwohl die Werte gefüllt sind
+    if (form) {
+      const disabledBtn = form.querySelector<HTMLElement>(
+        "button[type='submit'][disabled], input[type='submit'][disabled]",
+      );
+      if (disabledBtn && this.isElementVisible(disabledBtn)) {
+        disabledBtn.removeAttribute("disabled");
+        this.simulateFullClick(disabledBtn);
+        return;
+      }
     }
 
-    // Phase 2 nach kurzer Pause starten (Frameworks brauchen ~50-100ms für Model-Updates)
-    setTimeout(() => this.executeSubmitStrategies(), 150);
-  }
-
-  /**
-   * Phase 2: Submit-Button finden und klicken.
-   *
-   * Strategie-Reihenfolge:
-   * 1. Submit-Button im Formular (type=submit oder default-type)
-   * 2. Globaler Submit-Button
-   * 3. Klickbare Elemente mit Submit-Keywords (für ExtJS, Custom UIs)
-   * 4. Enter-Taste auf dem letzten Feld simulieren
-   * 5. cursor:pointer Elemente nahe dem gefüllten Feld
-   * 6. Einziger sichtbarer nicht-Cancel-Button
-   */
-  private executeSubmitStrategies() {
-    const filledEl = this.lastFilledElement;
-    const form = filledEl?.closest("form") as HTMLFormElement;
-
-    // Selektor für klickbare Elemente (breit: Standard + Frameworks wie ExtJS)
+    // 3. Klickbare Elemente mit Submit-Keywords (ExtJS Buttons, ARIA, Links)
     const clickableSelector =
       "button:not([disabled]), input[type='submit']:not([disabled]), " +
       "input[type='button']:not([disabled]), [role='button'], " +
-      "a.btn, a[class*='button'], a[class*='btn'], " +
+      "a[class*='btn'], a[class*='button'], " +
       "span[class*='btn'], div[class*='btn']";
-
-    // 1. Submit-Button innerhalb des Formulars
-    if (form) {
-      const formSubmitBtn = form.querySelector<HTMLElement>(
-        "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])",
-      );
-      if (formSubmitBtn && this.isElementVisible(formSubmitBtn)) {
-        this.simulateFullClick(formSubmitBtn);
-        return;
-      }
-
-      // Buttons ohne expliziten type (default ist submit in einem <form>)
-      const defaultBtn = form.querySelector<HTMLButtonElement>(
-        "button:not([type]):not([disabled])",
-      );
-      if (
-        defaultBtn &&
-        this.isElementVisible(defaultBtn) &&
-        !this.isResetOrCancelButton(defaultBtn)
-      ) {
-        this.simulateFullClick(defaultBtn);
-        return;
-      }
-    }
-
-    // 2. Globaler Submit-Button
-    const globalSubmitBtn = document.querySelector<HTMLElement>(
-      "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])",
-    );
-    if (globalSubmitBtn && this.isElementVisible(globalSubmitBtn)) {
-      this.simulateFullClick(globalSubmitBtn);
-      return;
-    }
-
-    // 3. Klickbare Elemente mit Submit-Keywords (ExtJS Buttons, ARIA etc.)
     const allClickables = document.querySelectorAll<HTMLElement>(clickableSelector);
     for (const el of Array.from(allClickables)) {
       if (this.isSubmitElement(el) && this.isElementVisible(el)) {
@@ -271,37 +220,12 @@ class AutofillInit implements AutofillInitInterface {
       }
     }
 
-    // 4. Enter-Taste auf dem letzten Feld simulieren (universell kompatibel)
+    // 4. cursor:pointer Elemente nahe dem gefüllten Feld (Custom UIs)
     if (filledEl && filledEl !== document.body) {
-      const enterEventInit: KeyboardEventInit = {
-        key: "Enter",
-        code: "Enter",
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-      };
-      filledEl.dispatchEvent(new KeyboardEvent("keydown", enterEventInit));
-      filledEl.dispatchEvent(new KeyboardEvent("keypress", enterEventInit));
-      filledEl.dispatchEvent(new KeyboardEvent("keyup", enterEventInit));
-      return;
-    }
-
-    // 5. cursor:pointer Elemente nahe dem gefüllten Feld (ExtJS, Custom UIs)
-    if (filledEl) {
       const pointerEl = this.findNearestPointerElement(filledEl);
       if (pointerEl) {
         this.simulateFullClick(pointerEl);
-        return;
       }
-    }
-
-    // 6. Einziger sichtbarer nicht-Cancel-Button
-    const visibleButtons = Array.from(allClickables).filter(
-      (el) => this.isElementVisible(el) && !this.isResetOrCancelButton(el),
-    );
-    if (visibleButtons.length === 1) {
-      this.simulateFullClick(visibleButtons[0]);
     }
   }
 
