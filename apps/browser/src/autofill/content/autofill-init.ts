@@ -23,6 +23,8 @@ class AutofillInit implements AutofillInitInterface {
   private readonly insertAutofillContentService: InsertAutofillContentService;
   private collectPageDetailsOnLoadTimeout: number | NodeJS.Timeout | undefined;
   private lastFilledElement: HTMLElement | null = null;
+  private autoSubmitClickCount = 0;
+  private static readonly MAX_AUTO_SUBMIT_CLICKS = 2; // Login + TOTP, dann Stop
   private readonly extensionMessageHandlers: AutofillExtensionMessageHandlers = {
     collectPageDetails: ({ message }) => this.collectPageDetails(message),
     collectPageDetailsImmediately: ({ message }) => this.collectPageDetails(message, true),
@@ -168,11 +170,15 @@ class AutofillInit implements AutofillInitInterface {
     console.log(
       "[BW-DEBUG] fillForm fertig, autoSubmitAfterFill:",
       autoSubmitAfterFill,
+      "clickCount:",
+      this.autoSubmitClickCount,
+      "/",
+      AutofillInit.MAX_AUTO_SUBMIT_CLICKS,
       "lastFilledElement:",
       this.lastFilledElement?.tagName,
       this.lastFilledElement?.getAttribute("type"),
     );
-    if (autoSubmitAfterFill) {
+    if (autoSubmitAfterFill && this.autoSubmitClickCount < AutofillInit.MAX_AUTO_SUBMIT_CLICKS) {
       setTimeout(() => this.trySubmitForm(), 500);
     }
   }
@@ -320,6 +326,7 @@ class AutofillInit implements AutofillInitInterface {
    * Browser-Default-Action ausgelöst wird (z.B. Form-Submission bei Submit-Buttons).
    */
   private simulateFullClick(element: HTMLElement) {
+    this.autoSubmitClickCount++;
     const eventInit: MouseEventInit = { bubbles: true, cancelable: true, view: window };
     element.dispatchEvent(new MouseEvent("mousedown", eventInit));
     element.dispatchEvent(new MouseEvent("mouseup", eventInit));
