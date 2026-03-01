@@ -148,43 +148,96 @@ class AutofillInit implements AutofillInitInterface {
 
     // Nach dem Füllen automatisch absenden, wenn aktiviert
     if (autoSubmitAfterFill) {
-      setTimeout(() => this.trySubmitForm(), 300);
+      setTimeout(() => this.trySubmitForm(), 500);
     }
   }
 
   /**
-   * Versucht das Formular abzusenden, indem der Submit-Button gesucht und geklickt wird.
-   * Sucht nach type="submit", dann nach Buttons mit Login-Keywords, dann form.submit().
+   * Versucht das Formular abzusenden. Strategie:
+   * 1. Expliziten Submit-Button suchen und klicken
+   * 2. Button mit Login-/Submit-Keywords suchen und klicken
+   * 3. Enter-Key auf dem aktiven Element simulieren (funktioniert mit den meisten Formularen)
+   * 4. Fallback: form.requestSubmit() / form.submit()
    */
   private trySubmitForm() {
-    // Aktives Formular finden (das zuletzt gefüllte Feld gehört dazu)
     const activeElement = document.activeElement as HTMLElement;
     const form = activeElement?.closest("form") as HTMLFormElement;
 
-    // Submit-Button im Formular oder Dokument suchen
-    const searchRoot = form || document.body;
-
-    // 1. Expliziten Submit-Button suchen
-    const submitInputs = searchRoot.querySelectorAll<HTMLInputElement>(
-      "input[type='submit'], button[type='submit']",
-    );
-    if (submitInputs.length > 0) {
-      submitInputs[0].click();
-      return;
+    // Suchbereich: zuerst im Formular, dann im gesamten Dokument
+    const searchRoots: HTMLElement[] = [];
+    if (form) {
+      searchRoots.push(form);
     }
+    searchRoots.push(document.body);
 
-    // 2. Buttons mit Login-Keywords suchen
-    const buttons = searchRoot.querySelectorAll<HTMLButtonElement>(
-      "button, [type='button'], [role='button']",
-    );
-    for (const button of Array.from(buttons)) {
-      if (this.isLoginButton(button)) {
-        button.click();
+    for (const searchRoot of searchRoots) {
+      // 1. Expliziten Submit-Button suchen
+      const submitBtn = searchRoot.querySelector<HTMLElement>(
+        "input[type='submit'], button[type='submit']",
+      );
+      if (submitBtn && this.isElementVisible(submitBtn)) {
+        submitBtn.click();
         return;
+      }
+
+      // 2. Buttons mit Login-/Submit-Keywords suchen
+      const buttons = searchRoot.querySelectorAll<HTMLElement>(
+        "button, [type='button'], [role='button'], a[role='button']",
+      );
+      for (const button of Array.from(buttons)) {
+        if (this.isLoginButton(button) && this.isElementVisible(button)) {
+          button.click();
+          return;
+        }
       }
     }
 
-    // 3. Fallback: form.requestSubmit() oder form.submit()
+    // 3. Enter-Key auf dem aktiven Element simulieren
+    if (activeElement && activeElement !== document.body) {
+      const enterEvent = new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      });
+      const notPrevented = activeElement.dispatchEvent(enterEvent);
+
+      // Auch keyup und keypress feuern für maximale Kompatibilität
+      activeElement.dispatchEvent(
+        new KeyboardEvent("keypress", {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      activeElement.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      // Wenn Enter nicht verhindert wurde und ein Formular existiert: submit
+      if (notPrevented && form) {
+        if (form.requestSubmit) {
+          form.requestSubmit();
+        } else {
+          form.submit();
+        }
+      }
+      return;
+    }
+
+    // 4. Letzter Fallback: form.submit()
     if (form) {
       if (form.requestSubmit) {
         form.requestSubmit();
@@ -201,6 +254,13 @@ class AutofillInit implements AutofillInitInterface {
     const keywordsSet = getSubmitButtonKeywordsSet(element);
     const keywordValues = Array.from(keywordsSet).join(",").toLowerCase();
     return SubmitLoginButtonNames.some((keyword) => keywordValues.indexOf(keyword) > -1);
+  }
+
+  /**
+   * Prüft ob ein Element sichtbar ist (nicht hidden/display:none).
+   */
+  private isElementVisible(element: HTMLElement): boolean {
+    return !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
   }
 
   /**

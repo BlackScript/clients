@@ -893,10 +893,18 @@ export class IdentityAutoFillConstants {
 export const SubmitLoginButtonNames: string[] = [
   "login",
   "signin",
+  "sign-in",
+  "log-in",
   "submit",
   "continue",
   "next",
   "verify",
+  "ok",
+  "confirm",
+  "anmelden",
+  "einloggen",
+  "weiter",
+  "absenden",
 ];
 
 export const SubmitChangePasswordButtonNames: string[] = [

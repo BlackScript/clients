@@ -1025,6 +1025,10 @@ export class OverlayBackground implements OverlayBackgroundInterface {
    * Prüft ob eine Tab-Session existiert und füllt automatisch den gespeicherten Cipher.
    * Wird nach dem Speichern der PageDetails aufgerufen, um bei mehrstufigen Logins
    * (z.B. Login → TOTP) den nächsten Schritt automatisch auszufüllen.
+   *
+   * Wichtig: Füllt NUR wenn die aktuelle Seite sich von der Session-URI unterscheidet
+   * (= Seitennavigation stattgefunden hat, z.B. von Login-Seite zu TOTP-Seite).
+   * Verhindert doppeltes Füllen auf derselben Seite.
    */
   private async tryAutoFillFromTabSession(tab: chrome.tabs.Tab) {
     if (!tab?.id || !tab?.url) {
@@ -1033,6 +1037,12 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
     const tabSession = this.tabSessionCipherService.getSession(tab.id, tab.url);
     if (!tabSession) {
+      return;
+    }
+
+    // Nur füllen wenn die URL sich geändert hat (Navigation zu nächstem Login-Schritt)
+    // Verhindert doppeltes Füllen auf derselben Seite wo die Session erstellt wurde
+    if (tabSession.uri === tab.url) {
       return;
     }
 
@@ -1073,6 +1083,10 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     if (totpCode) {
       this.platformUtilsService.copyToClipboard(totpCode);
     }
+
+    // Tab-Session nach erfolgreichem proaktivem Fill löschen,
+    // damit nicht bei jedem weiteren Seitenaufruf erneut gefüllt wird
+    this.tabSessionCipherService.clearSession(tab.id);
   }
 
   /**
