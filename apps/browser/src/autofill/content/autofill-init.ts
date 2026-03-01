@@ -199,8 +199,8 @@ class AutofillInit implements AutofillInitInterface {
 
     // Blur auf ALLEN sichtbaren Eingabefeldern auslösen — zwingt Frameworks wie ExtJS
     // ihr internes Datenmodell mit dem DOM-Wert zu synchronisieren.
-    // lastFilledElement reicht nicht: bei mehrstufigen Logins (z.B. Proxmox)
-    // wird password als letztes Element erfasst, aber das TOTP-Feld braucht auch ein Blur.
+    // Danach 150ms warten: ExtJS' checkChangeBuffer braucht ~50ms um den
+    // DOM-Wert ins interne Modell zu übernehmen. Erst danach klicken.
     if (attempt === 0) {
       const allInputs = document.querySelectorAll<HTMLInputElement>(
         "input:not([type='hidden']):not([type='checkbox']):not([type='radio'])",
@@ -211,8 +211,20 @@ class AutofillInit implements AutofillInitInterface {
           input.dispatchEvent(new Event("change", { bubbles: true }));
         }
       }
+      // Warten bis Frameworks den Blur verarbeitet haben, dann klicken
+      setTimeout(() => this.trySubmitFormClick(0), 150);
+      return;
     }
 
+    this.trySubmitFormClick(attempt);
+  }
+
+  /**
+   * Sucht und klickt den Submit-Button. Separiert von trySubmitForm
+   * um einen Delay nach Blur-Events zu ermöglichen.
+   */
+  private trySubmitFormClick(attempt: number) {
+    const maxAttempts = 6;
     // eslint-disable-next-line no-console
     console.log("[BW-DEBUG] trySubmitForm Versuch", attempt);
     const clicked = this.findAndClickSubmitButton();

@@ -1036,11 +1036,21 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
     const tabSession = this.tabSessionCipherService.getSession(tab.id, tab.url);
     if (!tabSession) {
+      // eslint-disable-next-line no-console
+      console.log("[BW-BG] tryAutoFillFromTabSession: keine Tab-Session für", tab.url);
       return;
     }
 
+    // eslint-disable-next-line no-console
+    console.log(
+      "[BW-BG] tryAutoFillFromTabSession: Session gefunden, cipherId:",
+      tabSession.cipherId,
+    );
+
     const pageDetailsMap = this.pageDetailsForTab[tab.id];
     if (!pageDetailsMap?.size) {
+      // eslint-disable-next-line no-console
+      console.log("[BW-BG] tryAutoFillFromTabSession: keine PageDetails");
       return;
     }
 
@@ -1048,8 +1058,13 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     // Verhindert erneutes Füllen von Username/Passwort auf der Login-Seite.
     const pageDetailsList: PageDetail[] = Array.from(pageDetailsMap.values());
     if (!this.pageHasTotpFields(pageDetailsList)) {
+      // eslint-disable-next-line no-console
+      console.log("[BW-BG] tryAutoFillFromTabSession: keine TOTP-Felder gefunden");
       return;
     }
+
+    // eslint-disable-next-line no-console
+    console.log("[BW-BG] tryAutoFillFromTabSession: TOTP-Felder gefunden, starte Fill");
 
     const activeUserId = await firstValueFrom(
       this.accountService.activeAccount$.pipe(getOptionalUserId),
@@ -1090,6 +1105,9 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       allowUntrustedIframe: false,
       allowTotpAutofill: true,
     });
+
+    // eslint-disable-next-line no-console
+    console.log("[BW-BG] tryAutoFillFromTabSession: doAutoFill Ergebnis totpCode:", !!totpCode);
 
     if (totpCode) {
       this.platformUtilsService.copyToClipboard(totpCode);
