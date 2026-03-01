@@ -126,6 +126,12 @@
     },
     "lock_vault": {
       "description": "__MSG_commandLockVaultDesc__"
+    },
+    "open_quick_access": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Period"
+      },
+      "description": "Open Quick Access overlay"
     }
   },
   "web_accessible_resources": [
