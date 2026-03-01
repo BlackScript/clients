@@ -25,7 +25,7 @@ import { AutofillSettingsServiceAbstraction } from "@bitwarden/common/autofill/s
 import { DomainSettingsService } from "@bitwarden/common/autofill/services/domain-settings.service";
 import { InlineMenuVisibilitySetting } from "@bitwarden/common/autofill/types";
 import { parseYearMonthExpiry } from "@bitwarden/common/autofill/utils";
-import { NeverDomains } from "@bitwarden/common/models/domain/domain-service";
+import { NeverDomains, UriMatchStrategy } from "@bitwarden/common/models/domain/domain-service";
 import { EnvironmentService } from "@bitwarden/common/platform/abstractions/environment.service";
 import {
   Fido2ActiveRequestEvents,
@@ -80,7 +80,6 @@ import {
   rectHasSize,
   specialCharacterToKeyMap,
 } from "../utils";
-
 
 import { LockedVaultPendingNotificationsData } from "./abstractions/notification.background";
 import { ModifyLoginCipherFormData } from "./abstractions/overlay-notifications.background";
@@ -148,7 +147,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   private showPasskeysLabelsWithinInlineMenu: boolean = false;
   private iconsServerUrl: string;
   private generatedPassword: string;
-  private tabSessionCipherService = new TabSessionCipherService();
+  private tabSessionCipherService = TabSessionCipherService.getInstance();
   private readonly validPortConnections: Set<string> = new Set([
     AutofillOverlayPort.Button,
     AutofillOverlayPort.ButtonMessageConnector,
@@ -445,7 +444,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
     const cipherViews = (
       await this.cipherService.getAllDecryptedForUrl(currentTab.url || "", activeUserId)
-    ).sort((a, b) => this.cipherService.sortCiphersByLastUsedThenName(a, b));
+    ).sort((a, b) => this.sortCiphersByUriPrecision(a, b, currentTab.url || ""));
 
     return this.cardAndIdentityCiphers
       ? cipherViews.concat(...this.cardAndIdentityCiphers)
@@ -472,7 +471,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
         CipherType.Card,
         CipherType.Identity,
       ])
-    ).sort((a, b) => this.cipherService.sortCiphersByLastUsedThenName(a, b));
+    ).sort((a, b) => this.sortCiphersByUriPrecision(a, b, currentTab.url || ""));
 
     if (!this.cardAndIdentityCiphers) {
       return cipherViews;
@@ -493,6 +492,87 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     }
 
     return cipherViews;
+  }
+
+  /**
+   * Berechnet einen URI-Präzisions-Score für einen Cipher relativ zur aktuellen URL.
+   * Höherer Score = bessere Übereinstimmung.
+   *
+   * Score 3: Exakte URL-Übereinstimmung (inkl. Pfad)
+   * Score 2: Exakter Hostname-Match (z.B. srv01.apps.huegel.cloud)
+   * Score 1: Host-Match inkl. Port
+   * Score 0: Nur Base-Domain-Match (Fallback)
+   */
+  private getUriPrecisionScore(cipher: CipherView, currentUrl: string): number {
+    if (!cipher.login?.uris?.length || !currentUrl) {
+      return 0;
+    }
+
+    let currentHostname: string;
+    try {
+      currentHostname = new URL(currentUrl).hostname;
+    } catch {
+      return 0;
+    }
+
+    let bestScore = 0;
+
+    for (const loginUri of cipher.login.uris) {
+      if (!loginUri.uri) {
+        continue;
+      }
+
+      // Regex-URIs können nicht sinnvoll verglichen werden
+      if (loginUri.match === UriMatchStrategy.RegularExpression) {
+        bestScore = Math.max(bestScore, 1);
+        continue;
+      }
+
+      try {
+        const cipherHostname = new URL(
+          loginUri.uri.includes("://") ? loginUri.uri : `https://${loginUri.uri}`,
+        ).hostname;
+
+        // Exakte URL-Übereinstimmung (inkl. Pfad)
+        if (currentUrl === loginUri.uri || currentUrl.startsWith(loginUri.uri)) {
+          return 3; // Maximaler Score
+        }
+
+        // Exakter Hostname-Match
+        if (cipherHostname === currentHostname) {
+          bestScore = Math.max(bestScore, 2);
+          continue;
+        }
+
+        // Nur Domain-Match (z.B. *.apps.huegel.cloud matcht apps.huegel.cloud)
+        bestScore = Math.max(bestScore, 0);
+      } catch {
+        continue;
+      }
+    }
+
+    return bestScore;
+  }
+
+  /**
+   * Sortiert Ciphers zuerst nach URI-Präzision (exakter Hostname-Match vor Base-Domain),
+   * dann nach zuletzt verwendet, dann nach Name.
+   */
+  private sortCiphersByUriPrecision(a: CipherView, b: CipherView, currentUrl: string): number {
+    // Nicht-Login-Ciphers (Cards, Identity) nicht nach URI sortieren
+    if (a.type !== CipherType.Login || b.type !== CipherType.Login) {
+      return this.cipherService.sortCiphersByLastUsedThenName(a, b);
+    }
+
+    const scoreA = this.getUriPrecisionScore(a, currentUrl);
+    const scoreB = this.getUriPrecisionScore(b, currentUrl);
+
+    if (scoreA !== scoreB) {
+      return scoreB - scoreA; // Höherer Score zuerst
+    }
+
+    // Bei gleichem Präzisions-Score: nach zuletzt verwendet sortieren
+    return this.cipherService.sortCiphersByLastUsedThenName(a, b);
   }
 
   /**
