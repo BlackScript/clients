@@ -1,8 +1,9 @@
 /**
  * Quick-Access-Overlay: Schwebendes Such-Overlay (Ctrl+\ / Cmd+\)
  *
- * Wird per Runtime-Message "toggleQuickAccess" ein-/ausgeblendet.
- * Enthält ein iframe das die Quick-Access-Seite der Extension lädt.
+ * Wird per Keyboard-Shortcut (Ctrl+\ / Cmd+\) oder Runtime-Message
+ * "toggleQuickAccess" ein-/ausgeblendet.
+ * Enthält ein iframe das die Popup-Vault-Ansicht der Extension lädt.
  */
 
 let quickAccessContainer: HTMLDivElement | null = null;
@@ -89,7 +90,22 @@ function removeQuickAccessOverlay() {
   }
 }
 
-// Runtime-Message-Listener
+// Keyboard-Shortcut: Ctrl+\ (Windows/Linux) bzw. Cmd+\ (Mac)
+// Die Chrome commands API unterstützt keine Backslash-Taste,
+// daher wird der Shortcut direkt im Content Script abgefangen.
+document.addEventListener(
+  "keydown",
+  (e: KeyboardEvent) => {
+    if (e.key === "\\" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      createQuickAccessOverlay();
+    }
+  },
+  true,
+);
+
+// Runtime-Message-Listener (Fallback für Background-Script-Trigger)
 chrome.runtime.onMessage.addListener((message: { command: string }) => {
   if (message.command === "toggleQuickAccess") {
     createQuickAccessOverlay();

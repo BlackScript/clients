@@ -126,13 +126,6 @@
     },
     "lock_vault": {
       "description": "__MSG_commandLockVaultDesc__"
-    },
-    "open_quick_access": {
-      "suggested_key": {
-        "default": "Ctrl+Backslash",
-        "mac": "Command+Backslash"
-      },
-      "description": "Open Quick Access"
     }
   },
   "web_accessible_resources": [

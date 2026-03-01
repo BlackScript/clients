@@ -77,9 +77,6 @@ export default class CommandsBackground {
       case "open_popup":
         await this.openPopup();
         break;
-      case "open_quick_access":
-        await this.openQuickAccess();
-        break;
       case "lock_vault": {
         const activeUserId = await firstValueFrom(getUserId(this.accountService.activeAccount$));
         await this.lockService.lock(activeUserId);
@@ -135,14 +132,5 @@ export default class CommandsBackground {
     }
 
     await this.main.openPopup();
-  }
-
-  private async openQuickAccess() {
-    const tab = await BrowserApi.getTabFromCurrentWindowId();
-    if (!tab) {
-      return;
-    }
-
-    await BrowserApi.tabSendMessageData(tab, "toggleQuickAccess", {});
   }
 }
