@@ -197,22 +197,35 @@ class AutofillInit implements AutofillInitInterface {
       return;
     }
 
-    // Blur auf ALLEN sichtbaren Eingabefeldern auslösen — zwingt Frameworks wie ExtJS
-    // ihr internes Datenmodell mit dem DOM-Wert zu synchronisieren.
-    // Danach 150ms warten: ExtJS' checkChangeBuffer braucht ~50ms um den
-    // DOM-Wert ins interne Modell zu übernehmen. Erst danach klicken.
+    // Framework-Model-Sync: Viele JS-Frameworks (ExtJS, React, Angular) speichern
+    // Eingabewerte intern. Bitwarden setzt element.value direkt, aber das Framework-
+    // Model bleibt leer. Drei Maßnahmen um die Synchronisation zu erzwingen:
+    // 1. InputEvent mit korrekten Properties dispatchen (allgemein)
+    // 2. Blur+Change Events (triggert ExtJS checkChange)
+    // 3. Page-Context Script für ExtJS-spezifische API (setRawValue)
     if (attempt === 0) {
       const allInputs = document.querySelectorAll<HTMLInputElement>(
         "input:not([type='hidden']):not([type='checkbox']):not([type='radio'])",
       );
       for (const input of Array.from(allInputs)) {
         if (input.value && this.isElementVisible(input)) {
-          input.dispatchEvent(new Event("blur", { bubbles: true }));
+          // InputEvent mit inputType — realistischer als generisches Event
+          input.dispatchEvent(
+            new InputEvent("input", {
+              bubbles: true,
+              cancelable: false,
+              inputType: "insertText",
+              data: input.value,
+            }),
+          );
           input.dispatchEvent(new Event("change", { bubbles: true }));
+          input.dispatchEvent(new Event("blur", { bubbles: true }));
         }
       }
-      // Warten bis Frameworks den Blur verarbeitet haben, dann klicken
-      setTimeout(() => this.trySubmitFormClick(0), 150);
+      // ExtJS-spezifisch: Page-Script injizieren das setRawValue aufruft
+      this.forceFrameworkModelSync();
+      // 200ms warten: ExtJS checkChangeBuffer (~50ms) + Script-Ausführung
+      setTimeout(() => this.trySubmitFormClick(0), 200);
       return;
     }
 
@@ -232,6 +245,40 @@ class AutofillInit implements AutofillInitInterface {
     console.log("[BW-DEBUG] trySubmitForm Versuch", attempt, "→ geklickt:", clicked);
     if (!clicked && attempt < maxAttempts) {
       setTimeout(() => this.trySubmitForm(attempt + 1), 500);
+    }
+  }
+
+  /**
+   * Injiziert ein Script in den Page-Context (nicht Content-Script-Isolation),
+   * das Framework-spezifische APIs aufruft um interne Datenmodelle mit den
+   * aktuellen DOM-Werten zu synchronisieren.
+   *
+   * Aktuell unterstützt: ExtJS (Proxmox, Sencha-basierte Apps).
+   * ExtJS-Textfelder speichern Werte intern als rawValue. Wenn der DOM-Wert
+   * programmatisch gesetzt wird (element.value = x), bleibt rawValue leer.
+   * Das Script ruft setRawValue() auf um die Synchronisation zu erzwingen.
+   *
+   * Fehlschlag (z.B. wegen CSP) wird still ignoriert — Blur-Events als Fallback.
+   */
+  private forceFrameworkModelSync() {
+    try {
+      const script = document.createElement("script");
+      script.textContent = `(function(){
+        try{
+          if(typeof Ext!=='undefined'&&Ext.ComponentQuery){
+            Ext.ComponentQuery.query('field').forEach(function(f){
+              if(f.inputEl&&f.inputEl.dom&&f.getRawValue&&f.setRawValue){
+                var v=f.inputEl.dom.value;
+                if(v&&v!==f.getRawValue()){f.setRawValue(v)}
+              }
+            });
+          }
+        }catch(e){}
+      })();`;
+      (document.head || document.documentElement).appendChild(script);
+      script.remove();
+    } catch {
+      // CSP oder anderer Fehler — Blur-Events als Fallback
     }
   }
 
