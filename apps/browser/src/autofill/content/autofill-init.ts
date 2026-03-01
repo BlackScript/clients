@@ -164,6 +164,14 @@ class AutofillInit implements AutofillInitInterface {
     );
 
     // Nach dem Füllen automatisch absenden, wenn aktiviert
+    // eslint-disable-next-line no-console
+    console.log(
+      "[BW-DEBUG] fillForm fertig, autoSubmitAfterFill:",
+      autoSubmitAfterFill,
+      "lastFilledElement:",
+      this.lastFilledElement?.tagName,
+      this.lastFilledElement?.getAttribute("type"),
+    );
     if (autoSubmitAfterFill) {
       setTimeout(() => this.trySubmitForm(), 500);
     }
@@ -178,10 +186,16 @@ class AutofillInit implements AutofillInitInterface {
   private trySubmitForm(attempt = 0) {
     const maxAttempts = 6; // 6 × 500ms = 3 Sekunden
     if (attempt > maxAttempts) {
+      // eslint-disable-next-line no-console
+      console.log("[BW-DEBUG] trySubmitForm: max Versuche erreicht, aufgegeben");
       return;
     }
 
+    // eslint-disable-next-line no-console
+    console.log("[BW-DEBUG] trySubmitForm Versuch", attempt);
     const clicked = this.findAndClickSubmitButton();
+    // eslint-disable-next-line no-console
+    console.log("[BW-DEBUG] trySubmitForm Versuch", attempt, "→ geklickt:", clicked);
     if (!clicked && attempt < maxAttempts) {
       setTimeout(() => this.trySubmitForm(attempt + 1), 500);
     }
@@ -200,13 +214,40 @@ class AutofillInit implements AutofillInitInterface {
     const filledEl = this.lastFilledElement;
     const form = filledEl?.closest("form") as HTMLFormElement;
 
+    // eslint-disable-next-line no-console
+    console.log(
+      "[BW-DEBUG] findAndClick: filledEl:",
+      filledEl?.tagName,
+      "form:",
+      !!form,
+      "form.action:",
+      form?.action,
+    );
+
     // 1. Enabled Submit-Button im Formular (oder global)
     const submitSelector =
       "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])";
     const submitBtn =
       form?.querySelector<HTMLElement>(submitSelector) ||
       document.querySelector<HTMLElement>(submitSelector);
+
+    // Auch disabled Buttons loggen
+    const disabledBtn = form?.querySelector<HTMLElement>(
+      "button[type='submit'][disabled], input[type='submit'][disabled]",
+    );
+    // eslint-disable-next-line no-console
+    console.log(
+      "[BW-DEBUG] findAndClick: enabledSubmitBtn:",
+      submitBtn?.tagName,
+      submitBtn?.textContent?.trim(),
+      "disabledSubmitBtn:",
+      disabledBtn?.tagName,
+      disabledBtn?.textContent?.trim(),
+    );
+
     if (submitBtn && this.isElementVisible(submitBtn)) {
+      // eslint-disable-next-line no-console
+      console.log("[BW-DEBUG] → Strategie 1: Klicke enabled Submit-Button");
       this.simulateFullClick(submitBtn);
       return true;
     }
@@ -217,8 +258,30 @@ class AutofillInit implements AutofillInitInterface {
       "a[class*='btn'], a[class*='button'], " +
       "span[class*='btn'], div[class*='btn']";
     const allClickables = document.querySelectorAll<HTMLElement>(clickableSelector);
+    // eslint-disable-next-line no-console
+    console.log("[BW-DEBUG] findAndClick: clickable Elemente:", allClickables.length);
     for (const el of Array.from(allClickables)) {
-      if (this.isSubmitElement(el) && this.isElementVisible(el)) {
+      const isSubmit = this.isSubmitElement(el);
+      const isVisible = this.isElementVisible(el);
+      if (isSubmit) {
+        // eslint-disable-next-line no-console
+        console.log(
+          "[BW-DEBUG]   Kandidat:",
+          el.tagName,
+          el.textContent?.trim()?.substring(0, 30),
+          "visible:",
+          isVisible,
+          "class:",
+          el.className?.toString()?.substring(0, 50),
+        );
+      }
+      if (isSubmit && isVisible) {
+        // eslint-disable-next-line no-console
+        console.log(
+          "[BW-DEBUG] → Strategie 2: Klicke Keyword-Element:",
+          el.tagName,
+          el.textContent?.trim(),
+        );
         this.simulateFullClick(el);
         return true;
       }
@@ -228,11 +291,19 @@ class AutofillInit implements AutofillInitInterface {
     if (filledEl && filledEl !== document.body) {
       const pointerEl = this.findNearestPointerElement(filledEl);
       if (pointerEl) {
+        // eslint-disable-next-line no-console
+        console.log(
+          "[BW-DEBUG] → Strategie 3: Klicke Pointer-Element:",
+          pointerEl.tagName,
+          pointerEl.textContent?.trim(),
+        );
         this.simulateFullClick(pointerEl);
         return true;
       }
     }
 
+    // eslint-disable-next-line no-console
+    console.log("[BW-DEBUG] findAndClick: KEIN Button gefunden");
     return false;
   }
 
