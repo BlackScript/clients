@@ -52,7 +52,6 @@ import { ScriptInjectorService } from "../../platform/services/abstractions/scri
 // eslint-disable-next-line no-restricted-imports
 import { openVaultItemPasswordRepromptPopout } from "../../vault/popup/utils/vault-popout-window";
 import { AutofillMessageCommand, AutofillMessageSender } from "../enums/autofill-message.enums";
-import { TabSessionCipherService } from "./tab-session-cipher.service";
 import { InlineMenuFillTypes } from "../enums/autofill-overlay.enum";
 import { AutofillPort } from "../enums/autofill-port.enum";
 import AutofillField from "../models/autofill-field";
@@ -73,6 +72,7 @@ import {
   CreditCardAutoFillConstants,
   IdentityAutoFillConstants,
 } from "./autofill-constants";
+import { TabSessionCipherService } from "./tab-session-cipher.service";
 
 export default class AutofillService implements AutofillServiceInterface {
   private openVaultItemPasswordRepromptPopout = openVaultItemPasswordRepromptPopout;
@@ -555,16 +555,13 @@ export default class AutofillService implements AutofillServiceInterface {
     // Tab-Session prüfen: bei mehrstufigen Logins den gespeicherten Cipher verwenden
     const tabSessionService = TabSessionCipherService.getInstance();
     const tabSession =
-      tab.id != null && tab.url
-        ? tabSessionService.getSession(tab.id, tab.url)
-        : null;
+      tab.id != null && tab.url ? tabSessionService.getSession(tab.id, tab.url) : null;
 
     if (tabSession && !fromCommand) {
       // Cipher aus Tab-Session laden (z.B. für TOTP nach Login)
-      const sessionCiphers = await this.cipherService.getAllDecryptedForIds(
-        activeUserId,
-        [tabSession.cipherId],
-      );
+      const sessionCiphers = await this.cipherService.getAllDecryptedForIds(activeUserId, [
+        tabSession.cipherId,
+      ]);
       if (sessionCiphers?.length) {
         cipher = sessionCiphers[0];
         fromTabSession = true;
@@ -623,8 +620,9 @@ export default class AutofillService implements AutofillServiceInterface {
       autoSubmitLogin,
     });
 
-    // Bei Tab-Session: Session aktualisieren für den nächsten Schritt
-    if (totpCode && tab.id != null && tab.url && cipher?.id) {
+    // Tab-Session speichern: bei JEDEM erfolgreichen Fill, wenn der Cipher TOTP hat.
+    // Damit wird der Cipher beim nächsten Schritt (z.B. TOTP-Seite) wiederverwendet.
+    if (tab.id != null && tab.url && cipher?.id && cipher.login?.totp) {
       tabSessionService.setSession(tab.id, cipher.id, tab.url);
     }
 
