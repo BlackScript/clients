@@ -71,6 +71,7 @@ import {
 import AutofillField from "../models/autofill-field";
 import { AutofillService, PageDetail } from "../services/abstractions/autofill.service";
 import { InlineMenuFieldQualificationService } from "../services/abstractions/inline-menu-field-qualifications.service";
+import { TabSessionCipherService } from "../services/tab-session-cipher.service";
 import {
   areKeyValuesNull,
   generateDomainMatchPatterns,
@@ -79,6 +80,7 @@ import {
   rectHasSize,
   specialCharacterToKeyMap,
 } from "../utils";
+
 
 import { LockedVaultPendingNotificationsData } from "./abstractions/notification.background";
 import { ModifyLoginCipherFormData } from "./abstractions/overlay-notifications.background";
@@ -146,6 +148,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   private showPasskeysLabelsWithinInlineMenu: boolean = false;
   private iconsServerUrl: string;
   private generatedPassword: string;
+  private tabSessionCipherService = new TabSessionCipherService();
   private readonly validPortConnections: Set<string> = new Set([
     AutofillOverlayPort.Button,
     AutofillOverlayPort.ButtonMessageConnector,
@@ -238,6 +241,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     private addPasswordCallback: (password: string) => Promise<void>,
   ) {
     this.initOverlayEventObservables();
+    this.tabSessionCipherService.init();
   }
 
   /**
@@ -378,6 +382,20 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     this.storeInlineMenuFido2Credentials$.next(currentTab.id);
 
     const ciphersViews = await this.getCipherViews(currentTab, updateAllCipherTypes);
+
+    // Tab-Session prüfen: gespeicherten Cipher an Position 1 setzen
+    const tabSession =
+      currentTab.id != null && currentTab.url
+        ? this.tabSessionCipherService.getSession(currentTab.id, currentTab.url)
+        : null;
+    if (tabSession) {
+      const sessionIdx = ciphersViews.findIndex((c) => c.id === tabSession.cipherId);
+      if (sessionIdx > 0) {
+        const [sessionCipher] = ciphersViews.splice(sessionIdx, 1);
+        ciphersViews.unshift(sessionCipher);
+      }
+    }
+
     for (let cipherIndex = 0; cipherIndex < ciphersViews.length; cipherIndex++) {
       this.inlineMenuCiphers.set(`inline-menu-cipher-${cipherIndex}`, ciphersViews[cipherIndex]);
     }
@@ -1182,6 +1200,11 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
     if (totpCode) {
       this.platformUtilsService.copyToClipboard(totpCode);
+    }
+
+    // Tab-Session speichern für mehrstufige Login-Flows
+    if (sender.tab?.id != null && sender.tab?.url && cipher?.id) {
+      this.tabSessionCipherService.setSession(sender.tab.id, cipher.id, sender.tab.url);
     }
 
     this.updateLastUsedInlineMenuCipher(inlineMenuCipherId, cipher);
@@ -2040,8 +2063,26 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
   /**
    * Gets the inline menu's visibility setting from the settings service.
+   * Checks for site-specific overrides first, falls back to global setting.
    */
   private async getInlineMenuVisibility(): Promise<InlineMenuVisibilitySetting> {
+    // Site-Override prüfen
+    const currentTab = await BrowserApi.getTabFromCurrentWindowId();
+    if (currentTab?.url) {
+      try {
+        const hostname = new URL(currentTab.url).hostname;
+        const overrides = await firstValueFrom(
+          this.autofillSettingsService.inlineMenuSiteOverrides$,
+        );
+        const siteOverride = overrides?.find((o) => o.hostname === hostname);
+        if (siteOverride) {
+          return siteOverride.visibility;
+        }
+      } catch {
+        // URL-Parsing fehlgeschlagen — globale Einstellung verwenden
+      }
+    }
+
     return await firstValueFrom(this.autofillSettingsService.inlineMenuVisibility$);
   }
 
