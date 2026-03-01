@@ -343,10 +343,32 @@ class AutofillInit implements AutofillInitInterface {
 
   /**
    * Prüft ob ein Element ein Submit-/Login-Button ist.
+   * Kurze Keywords (≤ 2 Zeichen wie "ok") werden nur als ganzes Wort geprüft,
+   * um Falschmeldungen zu vermeiden ("Dokumentation" enthält "ok" als Substring).
    */
   private isSubmitElement(element: HTMLElement): boolean {
-    const searchText = this.getElementSearchText(element);
-    return SubmitLoginButtonNames.some((keyword) => searchText.includes(keyword));
+    const normalizedText = this.getElementSearchText(element);
+
+    // Längere Keywords: Substring-Match auf normalisiertem Text (z.B. "login" in "log-in")
+    if (SubmitLoginButtonNames.some((kw) => kw.length > 2 && normalizedText.includes(kw))) {
+      return true;
+    }
+
+    // Kurze Keywords (z.B. "ok"): Nur als ganzes Wort im sichtbaren Text/Attributen
+    const shortKeywords = SubmitLoginButtonNames.filter((kw) => kw.length <= 2);
+    if (shortKeywords.length === 0) {
+      return false;
+    }
+    const rawWords = [
+      element.textContent?.trim(),
+      element.getAttribute("value"),
+      element.getAttribute("aria-label"),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .split(/\s+/);
+    return shortKeywords.some((kw) => rawWords.some((word) => word === kw));
   }
 
   /**
