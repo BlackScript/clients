@@ -1022,13 +1022,12 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   }
 
   /**
-   * Prüft ob eine Tab-Session existiert und füllt automatisch den gespeicherten Cipher.
-   * Wird nach dem Speichern der PageDetails aufgerufen, um bei mehrstufigen Logins
-   * (z.B. Login → TOTP) den nächsten Schritt automatisch auszufüllen.
+   * Prüft ob eine Tab-Session existiert und die aktuelle Seite TOTP-Felder enthält.
+   * Füllt automatisch den gespeicherten Cipher für TOTP bei mehrstufigen Logins.
    *
-   * Wichtig: Füllt NUR wenn die aktuelle Seite sich von der Session-URI unterscheidet
-   * (= Seitennavigation stattgefunden hat, z.B. von Login-Seite zu TOTP-Seite).
-   * Verhindert doppeltes Füllen auf derselben Seite.
+   * Triggert NUR wenn:
+   * - Eine Tab-Session existiert (= Cipher wurde bereits auf diesem Tab verwendet)
+   * - Die Seite TOTP-ähnliche Felder enthält (verhindert erneutes Füllen der Login-Felder)
    */
   private async tryAutoFillFromTabSession(tab: chrome.tabs.Tab) {
     if (!tab?.id || !tab?.url) {
@@ -1040,9 +1039,15 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       return;
     }
 
-    // Nur füllen wenn die URL sich geändert hat (Navigation zu nächstem Login-Schritt)
-    // Verhindert doppeltes Füllen auf derselben Seite wo die Session erstellt wurde
-    if (tabSession.uri === tab.url) {
+    const pageDetailsMap = this.pageDetailsForTab[tab.id];
+    if (!pageDetailsMap?.size) {
+      return;
+    }
+
+    // Nur füllen wenn die Seite TOTP-ähnliche Felder hat.
+    // Verhindert erneutes Füllen von Username/Passwort auf der Login-Seite.
+    const pageDetailsList: PageDetail[] = Array.from(pageDetailsMap.values());
+    if (!this.pageHasTotpFields(pageDetailsList)) {
       return;
     }
 
@@ -1061,12 +1066,6 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     }
 
     const cipher = sessionCiphers[0];
-    const pageDetailsMap = this.pageDetailsForTab[tab.id];
-    if (!pageDetailsMap?.size) {
-      return;
-    }
-
-    const pageDetailsList: PageDetail[] = Array.from(pageDetailsMap.values());
 
     const totpCode = await this.autofillService.doAutoFill({
       tab,
@@ -1084,9 +1083,73 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       this.platformUtilsService.copyToClipboard(totpCode);
     }
 
-    // Tab-Session nach erfolgreichem proaktivem Fill löschen,
-    // damit nicht bei jedem weiteren Seitenaufruf erneut gefüllt wird
+    // Tab-Session nach TOTP-Fill löschen (einmaliger Vorgang)
     this.tabSessionCipherService.clearSession(tab.id);
+  }
+
+  /**
+   * Prüft ob die PageDetails TOTP-ähnliche Felder enthalten.
+   * Verwendet die gleichen Keywords wie der Autofill-Service.
+   */
+  private pageHasTotpFields(pageDetailsList: PageDetail[]): boolean {
+    const totpKeywords = [
+      "totp",
+      "totpcode",
+      "2facode",
+      "mfacode",
+      "otp",
+      "otpcode",
+      "onetimecode",
+      "onetimepassword",
+      "one-time-code",
+      "twofactor",
+      "twofa",
+      "2fa",
+      "mfa",
+      "security_code",
+      "second-factor",
+      "verification",
+      "verify",
+      "code",
+      "pin",
+      "token",
+    ];
+
+    for (const pd of pageDetailsList) {
+      for (const field of pd.details?.fields || []) {
+        if (!field.viewable) {
+          continue;
+        }
+        // Nur text/number/tel Felder kommen für TOTP in Frage
+        if (!["text", "number", "tel"].includes(field.type)) {
+          continue;
+        }
+
+        const fieldAttrs = [
+          field.opid,
+          field.htmlID,
+          field.htmlName,
+          field.placeholder,
+          field["label-left"],
+          field["label-right"],
+          field["label-top"],
+          field["label-tag"],
+          field["label-aria"],
+          field.autoCompleteType,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        if (
+          field.autoCompleteType === "one-time-code" ||
+          totpKeywords.some((kw) => fieldAttrs.includes(kw))
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**

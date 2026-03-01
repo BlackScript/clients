@@ -9,7 +9,7 @@ import { DomQueryService } from "../services/abstractions/dom-query.service";
 import { SubmitLoginButtonNames } from "../services/autofill-constants";
 import { CollectAutofillContentService } from "../services/collect-autofill-content.service";
 import InsertAutofillContentService from "../services/insert-autofill-content.service";
-import { getSubmitButtonKeywordsSet, sendExtensionMessage } from "../utils";
+import { sendExtensionMessage } from "../utils";
 
 import {
   AutofillExtensionMessage,
@@ -153,91 +153,63 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Versucht das Formular abzusenden. Strategie:
-   * 1. Expliziten Submit-Button suchen und klicken
-   * 2. Button mit Login-/Submit-Keywords suchen und klicken
-   * 3. Enter-Key auf dem aktiven Element simulieren (funktioniert mit den meisten Formularen)
-   * 4. Fallback: form.requestSubmit() / form.submit()
+   * Versucht das Formular abzusenden. Aggressive Strategie wie 1Password:
+   * 1. Expliziten type="submit" Button/Input finden
+   * 2. Button mit Login-/Submit-Keywords (Text, Label, Attribute)
+   * 3. Einzigen sichtbaren Button in der Nähe der gefüllten Felder
+   * 4. Enter-Key auf dem zuletzt gefüllten Feld simulieren
+   * 5. form.requestSubmit() als Fallback
    */
   private trySubmitForm() {
-    const activeElement = document.activeElement as HTMLElement;
-    const form = activeElement?.closest("form") as HTMLFormElement;
+    // Gefüllte Eingabefelder finden (für Form-Erkennung und Enter-Simulation)
+    const filledInputs = this.findRecentlyFilledInputs();
+    const form = this.findFormFromInputs(filledInputs);
 
-    // Suchbereich: zuerst im Formular, dann im gesamten Dokument
-    const searchRoots: HTMLElement[] = [];
-    if (form) {
-      searchRoots.push(form);
-    }
-    searchRoots.push(document.body);
-
-    for (const searchRoot of searchRoots) {
-      // 1. Expliziten Submit-Button suchen
-      const submitBtn = searchRoot.querySelector<HTMLElement>(
-        "input[type='submit'], button[type='submit']",
-      );
-      if (submitBtn && this.isElementVisible(submitBtn)) {
-        submitBtn.click();
-        return;
-      }
-
-      // 2. Buttons mit Login-/Submit-Keywords suchen
-      const buttons = searchRoot.querySelectorAll<HTMLElement>(
-        "button, [type='button'], [role='button'], a[role='button']",
-      );
-      for (const button of Array.from(buttons)) {
-        if (this.isLoginButton(button) && this.isElementVisible(button)) {
-          button.click();
-          return;
-        }
-      }
-    }
-
-    // 3. Enter-Key auf dem aktiven Element simulieren
-    if (activeElement && activeElement !== document.body) {
-      const enterEvent = new KeyboardEvent("keydown", {
-        key: "Enter",
-        code: "Enter",
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-      });
-      const notPrevented = activeElement.dispatchEvent(enterEvent);
-
-      // Auch keyup und keypress feuern für maximale Kompatibilität
-      activeElement.dispatchEvent(
-        new KeyboardEvent("keypress", {
-          key: "Enter",
-          code: "Enter",
-          keyCode: 13,
-          which: 13,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-      activeElement.dispatchEvent(
-        new KeyboardEvent("keyup", {
-          key: "Enter",
-          code: "Enter",
-          keyCode: 13,
-          which: 13,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-
-      // Wenn Enter nicht verhindert wurde und ein Formular existiert: submit
-      if (notPrevented && form) {
-        if (form.requestSubmit) {
-          form.requestSubmit();
-        } else {
-          form.submit();
-        }
-      }
+    // 1. Expliziten Submit-Button suchen (global, nicht nur im Form)
+    const submitBtn = document.querySelector<HTMLElement>(
+      "input[type='submit'], button[type='submit']",
+    );
+    if (submitBtn && this.isElementVisible(submitBtn)) {
+      submitBtn.click();
       return;
     }
 
-    // 4. Letzter Fallback: form.submit()
+    // 2. Alle klickbaren Elemente auf der Seite durchsuchen (aggressiv)
+    const clickables = document.querySelectorAll<HTMLElement>(
+      "button, [type='button'], [role='button'], a[role='button'], a.btn, " +
+        "a[class*='button'], a[class*='btn'], span[role='button'], div[role='button'], " +
+        "input[type='button']",
+    );
+    for (const el of Array.from(clickables)) {
+      if (this.isSubmitElement(el) && this.isElementVisible(el)) {
+        el.click();
+        return;
+      }
+    }
+
+    // 3. Wenn es in/nahe dem Formular nur einen sichtbaren Button gibt → klicken
+    const searchContainer = form || this.findNearestContainer(filledInputs);
+    if (searchContainer) {
+      const containerButtons = searchContainer.querySelectorAll<HTMLElement>(
+        "button, [role='button'], input[type='button'], input[type='submit'], a.btn, " +
+          "a[class*='button'], a[class*='btn']",
+      );
+      const visibleButtons = Array.from(containerButtons).filter((b) => this.isElementVisible(b));
+      if (visibleButtons.length === 1) {
+        visibleButtons[0].click();
+        return;
+      }
+    }
+
+    // 4. Enter-Key auf dem zuletzt gefüllten Feld simulieren
+    const lastInput = filledInputs[filledInputs.length - 1];
+    if (lastInput) {
+      lastInput.focus();
+      this.simulateEnterKey(lastInput);
+      return;
+    }
+
+    // 5. Fallback: form.submit()
     if (form) {
       if (form.requestSubmit) {
         form.requestSubmit();
@@ -248,18 +220,108 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Prüft ob ein Button ein Login-/Submit-Button ist anhand seiner Attribute.
+   * Findet kürzlich gefüllte Eingabefelder anhand der Bitwarden-Animationsklasse
+   * oder einfach alle sichtbaren Felder mit Werten.
    */
-  private isLoginButton(element: HTMLElement): boolean {
-    const keywordsSet = getSubmitButtonKeywordsSet(element);
-    const keywordValues = Array.from(keywordsSet).join(",").toLowerCase();
-    return SubmitLoginButtonNames.some((keyword) => keywordValues.indexOf(keyword) > -1);
+  private findRecentlyFilledInputs(): HTMLInputElement[] {
+    // Bitwarden markiert gefüllte Felder mit einer Animation-Klasse
+    const animated = document.querySelectorAll<HTMLInputElement>(
+      "input[data-bwautofill], input.com-bitwarden-browser-animated-fill",
+    );
+    if (animated.length > 0) {
+      return Array.from(animated);
+    }
+
+    // Fallback: alle sichtbaren Input-Felder mit Werten
+    const inputs = document.querySelectorAll<HTMLInputElement>(
+      "input[type='text'], input[type='password'], input[type='email'], " +
+        "input[type='tel'], input[type='number']",
+    );
+    return Array.from(inputs).filter((i) => i.value && this.isElementVisible(i));
   }
 
   /**
-   * Prüft ob ein Element sichtbar ist (nicht hidden/display:none).
+   * Findet das Formular-Element das die gegebenen Inputs enthält.
+   */
+  private findFormFromInputs(inputs: HTMLInputElement[]): HTMLFormElement | null {
+    for (const input of inputs) {
+      const form = input.closest("form");
+      if (form) {
+        return form;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Findet den nächsten übergeordneten Container der gefüllten Felder.
+   * Nützlich für Formulare ohne <form>-Element.
+   */
+  private findNearestContainer(inputs: HTMLInputElement[]): HTMLElement | null {
+    if (!inputs.length) {
+      return null;
+    }
+    // Gemeinsamen Eltern-Container der Inputs finden
+    let container = inputs[0]?.parentElement;
+    while (container && container !== document.body) {
+      // Container groß genug wenn er alle Inputs enthält
+      const containsAll = inputs.every((i) => container.contains(i));
+      if (containsAll) {
+        return container;
+      }
+      container = container.parentElement;
+    }
+    return document.body;
+  }
+
+  /**
+   * Prüft ob ein Element ein Submit-/Login-Button ist.
+   * Durchsucht aggressiv: textContent, Attribute, Labels, aria-*, title, class, id.
+   */
+  private isSubmitElement(element: HTMLElement): boolean {
+    const searchText = [
+      element.textContent?.trim(),
+      element.getAttribute("value"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("title"),
+      element.getAttribute("id"),
+      element.getAttribute("name"),
+      element.getAttribute("class"),
+      // Auch Labels in der Nähe prüfen
+      element.closest("label")?.textContent?.trim(),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .replace(/[-_\s]+/g, "");
+
+    return SubmitLoginButtonNames.some((keyword) => searchText.includes(keyword));
+  }
+
+  /**
+   * Simuliert einen Enter-Tastendruck auf dem Element.
+   */
+  private simulateEnterKey(element: HTMLElement) {
+    const eventInit: KeyboardEventInit = {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+    };
+    element.dispatchEvent(new KeyboardEvent("keydown", eventInit));
+    element.dispatchEvent(new KeyboardEvent("keypress", eventInit));
+    element.dispatchEvent(new KeyboardEvent("keyup", eventInit));
+  }
+
+  /**
+   * Prüft ob ein Element sichtbar ist.
    */
   private isElementVisible(element: HTMLElement): boolean {
+    if (!element) {
+      return false;
+    }
     return !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
   }
 
