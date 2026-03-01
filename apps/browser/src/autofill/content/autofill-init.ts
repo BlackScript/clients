@@ -22,6 +22,7 @@ class AutofillInit implements AutofillInitInterface {
   private readonly collectAutofillContentService: CollectAutofillContentService;
   private readonly insertAutofillContentService: InsertAutofillContentService;
   private collectPageDetailsOnLoadTimeout: number | NodeJS.Timeout | undefined;
+  private lastFilledElement: HTMLElement | null = null;
   private readonly extensionMessageHandlers: AutofillExtensionMessageHandlers = {
     collectPageDetails: ({ message }) => this.collectPageDetails(message),
     collectPageDetailsImmediately: ({ message }) => this.collectPageDetails(message, true),
@@ -138,6 +139,9 @@ class AutofillInit implements AutofillInitInterface {
     });
     await this.insertAutofillContentService.fillForm(fillScript);
 
+    // Sofort nach dem Fill das aktive Element merken (bevor Animation-Klasse entfernt wird)
+    this.lastFilledElement = document.activeElement as HTMLElement;
+
     setTimeout(
       () =>
         this.sendExtensionMessage("updateIsFieldCurrentlyFilling", {
@@ -153,19 +157,25 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Versucht das Formular abzusenden. Aggressive Strategie wie 1Password:
-   * 1. Expliziten type="submit" Button/Input finden
-   * 2. Button mit Login-/Submit-Keywords (Text, Label, Attribute)
-   * 3. Einzigen sichtbaren Button in der Nähe der gefüllten Felder
-   * 4. Enter-Key auf dem zuletzt gefüllten Feld simulieren
-   * 5. form.requestSubmit() als Fallback
+   * Versucht das Formular abzusenden. Sucht aggressiv nach dem Submit-Button:
+   * 1. type="submit" Buttons/Inputs
+   * 2. Alle klickbaren Elemente mit Submit-Keywords im Text/Attributen
+   * 3. Einziger sichtbarer Button auf der Seite → klicken
+   * 4. form.requestSubmit() als Fallback
    */
   private trySubmitForm() {
-    // Gefüllte Eingabefelder finden (für Form-Erkennung und Enter-Simulation)
-    const filledInputs = this.findRecentlyFilledInputs();
-    const form = this.findFormFromInputs(filledInputs);
+    // Referenz auf das zuletzt gefüllte Element nutzen
+    const filledEl = this.lastFilledElement;
+    const form = filledEl?.closest("form") as HTMLFormElement;
 
-    // 1. Expliziten Submit-Button suchen (global, nicht nur im Form)
+    // Breiter Selektor für alle klickbaren Elemente
+    const clickableSelector =
+      "button, input[type='submit'], input[type='button'], " +
+      "[role='button'], a.btn, a[class*='button'], a[class*='btn'], " +
+      "a[class*='submit'], a[class*='login'], span[class*='btn'], " +
+      "div[class*='btn'], span[onclick], div[onclick]";
+
+    // 1. Expliziten type="submit" suchen
     const submitBtn = document.querySelector<HTMLElement>(
       "input[type='submit'], button[type='submit']",
     );
@@ -174,42 +184,34 @@ class AutofillInit implements AutofillInitInterface {
       return;
     }
 
-    // 2. Alle klickbaren Elemente auf der Seite durchsuchen (aggressiv)
-    const clickables = document.querySelectorAll<HTMLElement>(
-      "button, [type='button'], [role='button'], a[role='button'], a.btn, " +
-        "a[class*='button'], a[class*='btn'], span[role='button'], div[role='button'], " +
-        "input[type='button']",
-    );
-    for (const el of Array.from(clickables)) {
+    // 2. Alle klickbaren Elemente mit Submit-Keywords durchsuchen
+    const allClickables = document.querySelectorAll<HTMLElement>(clickableSelector);
+    for (const el of Array.from(allClickables)) {
       if (this.isSubmitElement(el) && this.isElementVisible(el)) {
         el.click();
         return;
       }
     }
 
-    // 3. Wenn es in/nahe dem Formular nur einen sichtbaren Button gibt → klicken
-    const searchContainer = form || this.findNearestContainer(filledInputs);
-    if (searchContainer) {
-      const containerButtons = searchContainer.querySelectorAll<HTMLElement>(
-        "button, [role='button'], input[type='button'], input[type='submit'], a.btn, " +
-          "a[class*='button'], a[class*='btn']",
-      );
-      const visibleButtons = Array.from(containerButtons).filter((b) => this.isElementVisible(b));
-      if (visibleButtons.length === 1) {
-        visibleButtons[0].click();
+    // 3. Einziger sichtbarer Button auf der Seite → wahrscheinlich der Submit
+    const visibleButtons = Array.from(allClickables).filter(
+      (el) => this.isElementVisible(el) && !this.isResetOrCancelButton(el),
+    );
+    if (visibleButtons.length === 1) {
+      visibleButtons[0].click();
+      return;
+    }
+
+    // 4. Bei mehreren Buttons: den nächsten zum gefüllten Feld wählen
+    if (filledEl && visibleButtons.length > 1) {
+      const closest = this.findClosestElement(filledEl, visibleButtons);
+      if (closest) {
+        closest.click();
         return;
       }
     }
 
-    // 4. Enter-Key auf dem zuletzt gefüllten Feld simulieren
-    const lastInput = filledInputs[filledInputs.length - 1];
-    if (lastInput) {
-      lastInput.focus();
-      this.simulateEnterKey(lastInput);
-      return;
-    }
-
-    // 5. Fallback: form.submit()
+    // 5. form.requestSubmit() als Fallback
     if (form) {
       if (form.requestSubmit) {
         form.requestSubmit();
@@ -220,66 +222,36 @@ class AutofillInit implements AutofillInitInterface {
   }
 
   /**
-   * Findet kürzlich gefüllte Eingabefelder anhand der Bitwarden-Animationsklasse
-   * oder einfach alle sichtbaren Felder mit Werten.
-   */
-  private findRecentlyFilledInputs(): HTMLInputElement[] {
-    // Bitwarden markiert gefüllte Felder mit einer Animation-Klasse
-    const animated = document.querySelectorAll<HTMLInputElement>(
-      "input[data-bwautofill], input.com-bitwarden-browser-animated-fill",
-    );
-    if (animated.length > 0) {
-      return Array.from(animated);
-    }
-
-    // Fallback: alle sichtbaren Input-Felder mit Werten
-    const inputs = document.querySelectorAll<HTMLInputElement>(
-      "input[type='text'], input[type='password'], input[type='email'], " +
-        "input[type='tel'], input[type='number']",
-    );
-    return Array.from(inputs).filter((i) => i.value && this.isElementVisible(i));
-  }
-
-  /**
-   * Findet das Formular-Element das die gegebenen Inputs enthält.
-   */
-  private findFormFromInputs(inputs: HTMLInputElement[]): HTMLFormElement | null {
-    for (const input of inputs) {
-      const form = input.closest("form");
-      if (form) {
-        return form;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Findet den nächsten übergeordneten Container der gefüllten Felder.
-   * Nützlich für Formulare ohne <form>-Element.
-   */
-  private findNearestContainer(inputs: HTMLInputElement[]): HTMLElement | null {
-    if (!inputs.length) {
-      return null;
-    }
-    // Gemeinsamen Eltern-Container der Inputs finden
-    let container = inputs[0]?.parentElement;
-    while (container && container !== document.body) {
-      // Container groß genug wenn er alle Inputs enthält
-      const containsAll = inputs.every((i) => container.contains(i));
-      if (containsAll) {
-        return container;
-      }
-      container = container.parentElement;
-    }
-    return document.body;
-  }
-
-  /**
    * Prüft ob ein Element ein Submit-/Login-Button ist.
-   * Durchsucht aggressiv: textContent, Attribute, Labels, aria-*, title, class, id.
    */
   private isSubmitElement(element: HTMLElement): boolean {
-    const searchText = [
+    const searchText = this.getElementSearchText(element);
+    return SubmitLoginButtonNames.some((keyword) => searchText.includes(keyword));
+  }
+
+  /**
+   * Prüft ob ein Element ein Cancel/Reset-Button ist (soll nicht geklickt werden).
+   */
+  private isResetOrCancelButton(element: HTMLElement): boolean {
+    const searchText = this.getElementSearchText(element);
+    const cancelKeywords = [
+      "cancel",
+      "reset",
+      "abbrechen",
+      "zurück",
+      "back",
+      "close",
+      "schließen",
+      "clear",
+    ];
+    return cancelKeywords.some((kw) => searchText.includes(kw));
+  }
+
+  /**
+   * Sammelt durchsuchbaren Text eines Elements (Text, Attribute, Labels).
+   */
+  private getElementSearchText(element: HTMLElement): string {
+    return [
       element.textContent?.trim(),
       element.getAttribute("value"),
       element.getAttribute("aria-label"),
@@ -287,32 +259,43 @@ class AutofillInit implements AutofillInitInterface {
       element.getAttribute("id"),
       element.getAttribute("name"),
       element.getAttribute("class"),
-      // Auch Labels in der Nähe prüfen
-      element.closest("label")?.textContent?.trim(),
     ]
       .filter(Boolean)
       .join(" ")
       .toLowerCase()
       .replace(/[-_\s]+/g, "");
-
-    return SubmitLoginButtonNames.some((keyword) => searchText.includes(keyword));
   }
 
   /**
-   * Simuliert einen Enter-Tastendruck auf dem Element.
+   * Findet das Element aus der Liste das dem Referenz-Element am nächsten ist (DOM-Distanz).
    */
-  private simulateEnterKey(element: HTMLElement) {
-    const eventInit: KeyboardEventInit = {
-      key: "Enter",
-      code: "Enter",
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-      cancelable: true,
-    };
-    element.dispatchEvent(new KeyboardEvent("keydown", eventInit));
-    element.dispatchEvent(new KeyboardEvent("keypress", eventInit));
-    element.dispatchEvent(new KeyboardEvent("keyup", eventInit));
+  private findClosestElement(
+    reference: HTMLElement,
+    candidates: HTMLElement[],
+  ): HTMLElement | null {
+    if (!candidates.length) {
+      return null;
+    }
+
+    const refRect = reference.getBoundingClientRect();
+    let closest: HTMLElement | null = null;
+    let minDistance = Infinity;
+
+    for (const candidate of candidates) {
+      // Cancel/Reset-Buttons überspringen
+      if (this.isResetOrCancelButton(candidate)) {
+        continue;
+      }
+      const rect = candidate.getBoundingClientRect();
+      const distance = Math.sqrt(
+        Math.pow(rect.left - refRect.left, 2) + Math.pow(rect.top - refRect.top, 2),
+      );
+      if (distance < minDistance) {
+        minDistance = distance;
+        closest = candidate;
+      }
+    }
+    return closest;
   }
 
   /**
