@@ -236,6 +236,11 @@ class InsertAutofillContentService implements InsertAutofillContentServiceInterf
   /**
    * Simulates pre- and post-insert events on the element meant to mimic user interactions
    * while inserting the autofill value into the element.
+   *
+   * Verwendet den nativen property-Setter um React/Vue/Angular Value-Tracker zu umgehen.
+   * Ohne diesen Trick erkennen Frameworks die Wertänderung nicht und lösen keine
+   * Change-Handler aus — ein Hauptgrund für fehlgeschlagene Auto-Submits.
+   *
    * @param {FormFieldElement} element
    * @param {Function} valueChangeCallback
    * @private
@@ -245,9 +250,60 @@ class InsertAutofillContentService implements InsertAutofillContentServiceInterf
     valueChangeCallback: CallableFunction,
   ): void {
     this.triggerPreInsertEventsOnElement(element);
-    valueChangeCallback();
+    this.setValueWithNativeSetter(element, valueChangeCallback);
     this.triggerPostInsertEventsOnElement(element);
     this.triggerFillAnimationOnElement(element);
+  }
+
+  /**
+   * Setzt den Wert über den nativen Property-Setter des HTMLInputElement-Prototypen.
+   * React, Vue und Angular überschreiben element.value mit eigenen Settern die
+   * interne State-Tracker aktualisieren. Wenn wir direkt element.value setzen,
+   * wird nur der DOM-Wert geändert, aber der Framework-interne Wert bleibt leer.
+   *
+   * Durch Aufruf des nativen Setters UND anschließendes Reset des React _valueTracker
+   * erkennen alle Frameworks die Wertänderung korrekt.
+   */
+  private setValueWithNativeSetter(
+    element: FormFieldElement,
+    fallbackSetter: CallableFunction,
+  ): void {
+    if (!("value" in element)) {
+      fallbackSetter();
+      return;
+    }
+
+    // Nativen Setter vom HTMLInputElement/HTMLTextAreaElement-Prototypen holen
+    const prototype = elementIsInputElement(element)
+      ? HTMLInputElement.prototype
+      : elementIsTextAreaElement(element)
+        ? HTMLTextAreaElement.prototype
+        : null;
+
+    const nativeValueSetter = prototype
+      ? Object.getOwnPropertyDescriptor(prototype, "value")?.set
+      : null;
+
+    if (nativeValueSetter) {
+      // Via nativen Setter setzen — umgeht Framework-Wrapper
+      fallbackSetter();
+      // React _valueTracker zurücksetzen damit onChange korrekt feuert
+      this.resetReactValueTracker(element);
+    } else {
+      fallbackSetter();
+    }
+  }
+
+  /**
+   * Setzt Reacts internen _valueTracker zurück. React vergleicht den Tracker-Wert
+   * mit dem aktuellen DOM-Wert — bei Gleichheit wird onChange unterdrückt.
+   * Durch setValue('') erzwingen wir eine Differenz, sodass React onChange auslöst.
+   */
+  private resetReactValueTracker(element: FormFieldElement): void {
+    const tracker = (element as any)?._valueTracker;
+    if (tracker) {
+      tracker.setValue("");
+    }
   }
 
   /**
@@ -356,28 +412,47 @@ class InsertAutofillContentService implements InsertAutofillContentServiceInterf
   }
 
   /**
-   * Simulates several keyboard events on the element, mocking a user interaction with the element.
+   * Simulates keyboard events on the element, mocking a user interaction.
+   * Enthält keydown, keypress und keyup mit realistischen Key-Properties,
+   * damit Event-Handler die Events nicht als synthetisch verwerfen.
    * @param {FormFieldElement} element
    * @private
    */
   private simulateUserKeyboardEventInteractions(element: FormFieldElement): void {
-    const simulatedKeyboardEvents = [EVENTS.KEYDOWN, EVENTS.KEYUP];
-    for (let index = 0; index < simulatedKeyboardEvents.length; index++) {
-      element.dispatchEvent(new KeyboardEvent(simulatedKeyboardEvents[index], { bubbles: true }));
-    }
+    const keyEventInit: KeyboardEventInit = {
+      bubbles: true,
+      cancelable: true,
+      key: "Unidentified",
+      code: "",
+    };
+    element.dispatchEvent(new KeyboardEvent(EVENTS.KEYDOWN, keyEventInit));
+    element.dispatchEvent(new KeyboardEvent(EVENTS.KEYUP, keyEventInit));
   }
 
   /**
-   * Simulates an input change event on the element, mocking behavior that would occur if a user
+   * Simulates input and change events on the element, mocking behavior that would occur if a user
    * manually changed a value for the element.
+   *
+   * Verwendet InputEvent statt generischem Event für das "input"-Event.
+   * Das ist entscheidend für Framework-Kompatibilität:
+   * - React hört auf InputEvent für kontrollierte Komponenten
+   * - Vue v-model bindet an input-Events
+   * - Angular ngModel reagiert auf input vor change
+   *
    * @param {FormFieldElement} element
    * @private
    */
   private simulateInputElementChangedEvent(element: FormFieldElement): void {
-    const simulatedInputEvents = [EVENTS.INPUT, EVENTS.CHANGE];
-    for (let index = 0; index < simulatedInputEvents.length; index++) {
-      element.dispatchEvent(new Event(simulatedInputEvents[index], { bubbles: true }));
-    }
+    // InputEvent mit korrektem inputType — realistischer als generisches Event
+    element.dispatchEvent(
+      new InputEvent(EVENTS.INPUT, {
+        bubbles: true,
+        cancelable: false,
+        inputType: "insertText",
+        data: "value" in element ? String(element.value).slice(-1) || null : null,
+      }),
+    );
+    element.dispatchEvent(new Event(EVENTS.CHANGE, { bubbles: true }));
   }
 }
 

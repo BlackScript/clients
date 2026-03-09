@@ -218,13 +218,31 @@ class AutofillInit implements AutofillInitInterface {
   /**
    * Dispatcht Input/Change/Blur-Events auf alle sichtbaren gefüllten Felder
    * um Framework-interne Models (React, Vue, Angular, ExtJS) zu synchronisieren.
+   *
+   * Setzt zusätzlich den React _valueTracker zurück, damit React onChange auslöst.
+   * Verwendet den nativen HTMLInputElement.prototype.value-Setter für Vue/Angular.
    */
   private dispatchFrameworkSyncEvents() {
+    const nativeInputSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+
     const allInputs = document.querySelectorAll<HTMLInputElement>(
       "input:not([type='hidden']):not([type='checkbox']):not([type='radio'])",
     );
     for (const input of Array.from(allInputs)) {
       if (input.value && this.isElementVisible(input)) {
+        // Nativen Setter aufrufen um Framework-Wrapper zu triggern
+        if (nativeInputSetter) {
+          nativeInputSetter.call(input, input.value);
+        }
+        // React Value-Tracker zurücksetzen
+        const tracker = (input as any)?._valueTracker;
+        if (tracker) {
+          tracker.setValue("");
+        }
+        // Events in korrekter Reihenfolge: input → change → blur
         input.dispatchEvent(
           new InputEvent("input", {
             bubbles: true,
