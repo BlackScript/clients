@@ -23,8 +23,10 @@ class AutofillInit implements AutofillInitInterface {
   private readonly insertAutofillContentService: InsertAutofillContentService;
   private collectPageDetailsOnLoadTimeout: number | NodeJS.Timeout | undefined;
   private lastFilledElement: HTMLElement | null = null;
+  private autoSubmitInProgress = false;
   private autoSubmitClickCount = 0;
   private static readonly MAX_AUTO_SUBMIT_CLICKS = 2; // Login + TOTP, dann Stop
+  private pendingSubmitTimers: ReturnType<typeof setTimeout>[] = [];
   private readonly extensionMessageHandlers: AutofillExtensionMessageHandlers = {
     collectPageDetails: ({ message }) => this.collectPageDetails(message),
     collectPageDetailsImmediately: ({ message }) => this.collectPageDetails(message, true),
@@ -166,20 +168,13 @@ class AutofillInit implements AutofillInitInterface {
     );
 
     // Nach dem Füllen automatisch absenden, wenn aktiviert
-    // eslint-disable-next-line no-console
-    console.log(
-      "[BW-DEBUG] fillForm fertig, autoSubmitAfterFill:",
-      autoSubmitAfterFill,
-      "clickCount:",
-      this.autoSubmitClickCount,
-      "/",
-      AutofillInit.MAX_AUTO_SUBMIT_CLICKS,
-      "lastFilledElement:",
-      this.lastFilledElement?.tagName,
-      this.lastFilledElement?.getAttribute("type"),
-    );
-    if (autoSubmitAfterFill && this.autoSubmitClickCount < AutofillInit.MAX_AUTO_SUBMIT_CLICKS) {
-      setTimeout(() => this.trySubmitForm(), 500);
+    if (
+      autoSubmitAfterFill &&
+      !this.autoSubmitInProgress &&
+      this.autoSubmitClickCount < AutofillInit.MAX_AUTO_SUBMIT_CLICKS
+    ) {
+      this.autoSubmitInProgress = true;
+      this.scheduleTimeout(() => this.trySubmitForm(), 500);
     }
   }
 
@@ -192,8 +187,14 @@ class AutofillInit implements AutofillInitInterface {
   private trySubmitForm(attempt = 0) {
     const maxAttempts = 6; // 6 × 500ms = 3 Sekunden
     if (attempt > maxAttempts) {
-      // eslint-disable-next-line no-console
-      console.log("[BW-DEBUG] trySubmitForm: max Versuche erreicht, aufgegeben");
+      this.autoSubmitInProgress = false;
+      return;
+    }
+
+    // Prüfen ob lastFilledElement noch im DOM ist
+    if (this.lastFilledElement && !document.contains(this.lastFilledElement)) {
+      this.lastFilledElement = null;
+      this.autoSubmitInProgress = false;
       return;
     }
 
@@ -204,32 +205,38 @@ class AutofillInit implements AutofillInitInterface {
     // 2. Blur+Change Events (triggert ExtJS checkChange)
     // 3. Page-Context Script für ExtJS-spezifische API (setRawValue)
     if (attempt === 0) {
-      const allInputs = document.querySelectorAll<HTMLInputElement>(
-        "input:not([type='hidden']):not([type='checkbox']):not([type='radio'])",
-      );
-      for (const input of Array.from(allInputs)) {
-        if (input.value && this.isElementVisible(input)) {
-          // InputEvent mit inputType — realistischer als generisches Event
-          input.dispatchEvent(
-            new InputEvent("input", {
-              bubbles: true,
-              cancelable: false,
-              inputType: "insertText",
-              data: input.value,
-            }),
-          );
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-          input.dispatchEvent(new Event("blur", { bubbles: true }));
-        }
-      }
-      // ExtJS-spezifisch: Page-Script injizieren das setRawValue aufruft
+      this.dispatchFrameworkSyncEvents();
       this.forceFrameworkModelSync();
       // 200ms warten: ExtJS checkChangeBuffer (~50ms) + Script-Ausführung
-      setTimeout(() => this.trySubmitFormClick(0), 200);
+      this.scheduleTimeout(() => this.trySubmitFormClick(0), 200);
       return;
     }
 
     this.trySubmitFormClick(attempt);
+  }
+
+  /**
+   * Dispatcht Input/Change/Blur-Events auf alle sichtbaren gefüllten Felder
+   * um Framework-interne Models (React, Vue, Angular, ExtJS) zu synchronisieren.
+   */
+  private dispatchFrameworkSyncEvents() {
+    const allInputs = document.querySelectorAll<HTMLInputElement>(
+      "input:not([type='hidden']):not([type='checkbox']):not([type='radio'])",
+    );
+    for (const input of Array.from(allInputs)) {
+      if (input.value && this.isElementVisible(input)) {
+        input.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            cancelable: false,
+            inputType: "insertText",
+            data: input.value,
+          }),
+        );
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
+      }
+    }
   }
 
   /**
@@ -238,13 +245,16 @@ class AutofillInit implements AutofillInitInterface {
    */
   private trySubmitFormClick(attempt: number) {
     const maxAttempts = 6;
-    // eslint-disable-next-line no-console
-    console.log("[BW-DEBUG] trySubmitForm Versuch", attempt);
     const clicked = this.findAndClickSubmitButton();
-    // eslint-disable-next-line no-console
-    console.log("[BW-DEBUG] trySubmitForm Versuch", attempt, "→ geklickt:", clicked);
-    if (!clicked && attempt < maxAttempts) {
-      setTimeout(() => this.trySubmitForm(attempt + 1), 500);
+    if (clicked) {
+      this.autoSubmitInProgress = false;
+      this.clearPendingTimers();
+      return;
+    }
+    if (attempt < maxAttempts) {
+      this.scheduleTimeout(() => this.trySubmitForm(attempt + 1), 500);
+    } else {
+      this.autoSubmitInProgress = false;
     }
   }
 
@@ -295,16 +305,6 @@ class AutofillInit implements AutofillInitInterface {
     const filledEl = this.lastFilledElement;
     const form = filledEl?.closest("form") as HTMLFormElement;
 
-    // eslint-disable-next-line no-console
-    console.log(
-      "[BW-DEBUG] findAndClick: filledEl:",
-      filledEl?.tagName,
-      "form:",
-      !!form,
-      "form.action:",
-      form?.action,
-    );
-
     // 1. Enabled Submit-Button im Formular (oder global)
     const submitSelector =
       "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])";
@@ -312,86 +312,35 @@ class AutofillInit implements AutofillInitInterface {
       form?.querySelector<HTMLElement>(submitSelector) ||
       document.querySelector<HTMLElement>(submitSelector);
 
-    // Auch disabled Buttons loggen
-    const disabledBtn = form?.querySelector<HTMLElement>(
-      "button[type='submit'][disabled], input[type='submit'][disabled]",
-    );
-    // eslint-disable-next-line no-console
-    console.log(
-      "[BW-DEBUG] findAndClick: enabledSubmitBtn:",
-      submitBtn?.tagName,
-      submitBtn?.textContent?.trim(),
-      "disabledSubmitBtn:",
-      disabledBtn?.tagName,
-      disabledBtn?.textContent?.trim(),
-    );
-
     if (submitBtn && this.isElementVisible(submitBtn)) {
-      // eslint-disable-next-line no-console
-      console.log("[BW-DEBUG] → Strategie 1: Klicke enabled Submit-Button");
       this.simulateFullClick(submitBtn);
       return true;
     }
 
     // 2. Klickbare Elemente mit Submit-Keywords (ExtJS Buttons, ARIA, Links)
-    // Aber: <a>-Elemente mit echtem href (Navigation) ausschließen — nur role="button" zählt
     const clickableSelector =
       "button:not([disabled]), [role='button'], " +
-      "a[class*='btn'], a[class*='button'], " +
-      "span[class*='btn'], div[class*='btn']";
+      "a:not([href])[class*='btn'], a[href='#'][class*='btn'], a[href^='javascript:'][class*='btn']";
     const allClickables = document.querySelectorAll<HTMLElement>(clickableSelector);
-    // eslint-disable-next-line no-console
-    console.log("[BW-DEBUG] findAndClick: clickable Elemente:", allClickables.length);
     for (const el of Array.from(allClickables)) {
-      // <a>-Elemente mit echtem href überspringen (sind Navigations-Links, keine Buttons)
-      // Ausnahme: role="button" (z.B. ExtJS Buttons wie bei Proxmox)
       if (el.tagName === "A" && this.isNavigationLink(el as HTMLAnchorElement)) {
         continue;
       }
-      const isSubmit = this.isSubmitElement(el);
-      const isVisible = this.isElementVisible(el);
-      if (isSubmit) {
-        // eslint-disable-next-line no-console
-        console.log(
-          "[BW-DEBUG]   Kandidat:",
-          el.tagName,
-          el.textContent?.trim()?.substring(0, 30),
-          "visible:",
-          isVisible,
-          "class:",
-          el.className?.toString()?.substring(0, 50),
-        );
-      }
-      if (isSubmit && isVisible) {
-        // eslint-disable-next-line no-console
-        console.log(
-          "[BW-DEBUG] → Strategie 2: Klicke Keyword-Element:",
-          el.tagName,
-          el.textContent?.trim(),
-        );
+      if (this.isSubmitElement(el) && this.isElementVisible(el)) {
         this.simulateFullClick(el);
         return true;
       }
     }
 
-    // 3. cursor:pointer Elemente nahe dem gefüllten Feld — NUR mit Submit-Keywords!
-    // Ohne Keywords werden sonst Sidebar-Buttons, Nav-Links etc. geklickt.
-    if (filledEl && filledEl !== document.body) {
+    // 3. cursor:pointer Elemente nahe dem gefüllten Feld — NUR mit Submit-Keywords
+    if (filledEl && filledEl !== document.body && document.contains(filledEl)) {
       const pointerEl = this.findNearestSubmitPointerElement(filledEl);
       if (pointerEl) {
-        // eslint-disable-next-line no-console
-        console.log(
-          "[BW-DEBUG] → Strategie 3: Klicke Pointer-Element:",
-          pointerEl.tagName,
-          pointerEl.textContent?.trim(),
-        );
         this.simulateFullClick(pointerEl);
         return true;
       }
     }
 
-    // eslint-disable-next-line no-console
-    console.log("[BW-DEBUG] findAndClick: KEIN Button gefunden");
     return false;
   }
 
@@ -503,21 +452,17 @@ class AutofillInit implements AutofillInitInterface {
     let closest: HTMLElement | null = null;
     let minDistance = Infinity;
 
-    const candidates = document.querySelectorAll<HTMLElement>("*");
+    // Gezielte Suche statt document.querySelectorAll("*") — deutlich performanter
+    const candidateSelector =
+      "button, input[type='submit'], input[type='button'], [role='button'], " +
+      "a[class*='btn'], span[class*='btn'], div[class*='btn'], " +
+      "a[class*='button'], span[class*='button'], div[class*='button']";
+    const candidates = document.querySelectorAll<HTMLElement>(candidateSelector);
     for (const el of Array.from(candidates)) {
       if (el.contains(reference) || el === reference) {
         continue;
       }
-      if (el.querySelector("input, select, textarea")) {
-        continue;
-      }
-      // <a>-Links mit echtem href überspringen
       if (el.tagName === "A" && this.isNavigationLink(el as HTMLAnchorElement)) {
-        continue;
-      }
-
-      const style = globalThis.getComputedStyle(el);
-      if (style.cursor !== "pointer") {
         continue;
       }
 
@@ -531,8 +476,6 @@ class AutofillInit implements AutofillInitInterface {
       if (this.isResetOrCancelButton(el)) {
         continue;
       }
-
-      // NUR Elemente mit Submit-Keywords — kein Fallback auf "kurzer Text"
       if (!this.isSubmitElement(el)) {
         continue;
       }
@@ -556,6 +499,27 @@ class AutofillInit implements AutofillInitInterface {
       return false;
     }
     return !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
+  }
+
+  /**
+   * Plant einen Timer und merkt ihn für spätere Bereinigung.
+   */
+  private scheduleTimeout(callback: () => void, delay: number) {
+    const timer = setTimeout(() => {
+      this.pendingSubmitTimers = this.pendingSubmitTimers.filter((t) => t !== timer);
+      callback();
+    }, delay);
+    this.pendingSubmitTimers.push(timer);
+  }
+
+  /**
+   * Löscht alle ausstehenden Auto-Submit-Timer.
+   */
+  private clearPendingTimers() {
+    for (const timer of this.pendingSubmitTimers) {
+      clearTimeout(timer);
+    }
+    this.pendingSubmitTimers = [];
   }
 
   /**
@@ -637,6 +601,8 @@ class AutofillInit implements AutofillInitInterface {
    */
   destroy() {
     this.clearCollectPageDetailsOnLoadTimeout();
+    this.clearPendingTimers();
+    this.autoSubmitInProgress = false;
     globalThis.removeEventListener(EVENTS.LOAD, this.sendCollectDetailsMessage);
     chrome.runtime.onMessage.removeListener(this.handleExtensionMessage);
     this.collectAutofillContentService.destroy();

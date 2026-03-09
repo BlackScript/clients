@@ -1036,21 +1036,11 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
     const tabSession = this.tabSessionCipherService.getSession(tab.id, tab.url);
     if (!tabSession) {
-      // eslint-disable-next-line no-console
-      console.log("[BW-BG] tryAutoFillFromTabSession: keine Tab-Session für", tab.url);
       return;
     }
 
-    // eslint-disable-next-line no-console
-    console.log(
-      "[BW-BG] tryAutoFillFromTabSession: Session gefunden, cipherId:",
-      tabSession.cipherId,
-    );
-
     const pageDetailsMap = this.pageDetailsForTab[tab.id];
     if (!pageDetailsMap?.size) {
-      // eslint-disable-next-line no-console
-      console.log("[BW-BG] tryAutoFillFromTabSession: keine PageDetails");
       return;
     }
 
@@ -1058,13 +1048,8 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     // Verhindert erneutes Füllen von Username/Passwort auf der Login-Seite.
     const pageDetailsList: PageDetail[] = Array.from(pageDetailsMap.values());
     if (!this.pageHasTotpFields(pageDetailsList)) {
-      // eslint-disable-next-line no-console
-      console.log("[BW-BG] tryAutoFillFromTabSession: keine TOTP-Felder gefunden");
       return;
     }
-
-    // eslint-disable-next-line no-console
-    console.log("[BW-BG] tryAutoFillFromTabSession: TOTP-Felder gefunden, starte Fill");
 
     const activeUserId = await firstValueFrom(
       this.accountService.activeAccount$.pipe(getOptionalUserId),
@@ -1106,9 +1091,6 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       allowTotpAutofill: true,
     });
 
-    // eslint-disable-next-line no-console
-    console.log("[BW-BG] tryAutoFillFromTabSession: doAutoFill Ergebnis totpCode:", !!totpCode);
-
     if (totpCode) {
       this.platformUtilsService.copyToClipboard(totpCode);
     }
@@ -1121,107 +1103,37 @@ export class OverlayBackground implements OverlayBackgroundInterface {
    * Prüft ob die PageDetails TOTP-ähnliche Felder enthalten.
    * Verwendet die gleichen Keywords wie der Autofill-Service.
    */
-  private pageHasTotpFields(pageDetailsList: PageDetail[]): boolean {
-    const totpKeywords = [
-      "totp",
-      "totpcode",
-      "2facode",
-      "mfacode",
-      "otp",
-      "otpcode",
-      "onetimecode",
-      "onetimepassword",
-      "one-time-code",
-      "twofactor",
-      "twofa",
-      "2fa",
-      "mfa",
-      "security_code",
-      "second-factor",
-      "verification",
-      "verify",
-      "code",
-      "pin",
-      "token",
-    ];
-
-    for (const pd of pageDetailsList) {
-      for (const field of pd.details?.fields || []) {
-        if (!field.viewable) {
-          continue;
-        }
-        // Nur text/number/tel Felder kommen für TOTP in Frage
-        if (!["text", "number", "tel"].includes(field.type)) {
-          continue;
-        }
-
-        const fieldAttrs = [
-          field.opid,
-          field.htmlID,
-          field.htmlName,
-          field.placeholder,
-          field["label-left"],
-          field["label-right"],
-          field["label-top"],
-          field["label-tag"],
-          field["label-aria"],
-          field.autoCompleteType,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-
-        if (
-          field.autoCompleteType === "one-time-code" ||
-          totpKeywords.some((kw) => fieldAttrs.includes(kw))
-        ) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
+  /**
+   * Spezifische TOTP-Keywords — keine generischen Begriffe wie "code", "pin", "token",
+   * da diese False-Positives erzeugen (postal code, error code, CSRF token, etc.).
+   */
+  private static readonly TOTP_KEYWORDS = [
+    "totp",
+    "totpcode",
+    "2facode",
+    "mfacode",
+    "otp",
+    "otpcode",
+    "onetimecode",
+    "onetimepassword",
+    "one-time-code",
+    "twofactor",
+    "twofa",
+    "2fa",
+    "mfa",
+    "security_code",
+    "second-factor",
+    "authcode",
+    "authenticator",
+    "verification_code",
+    "verificationcode",
+  ];
 
   /**
-   * Prüft ob ein einzelnes Feld TOTP-ähnlich ist (gleiche Logik wie pageHasTotpFields).
-   * Wird verwendet um PageDetails auf reine TOTP-Felder zu filtern.
+   * Sammelt durchsuchbare Feld-Attribute als normalisierten String.
    */
-  private isTotpLikeField(field: AutofillField): boolean {
-    if (!field.viewable) {
-      return false;
-    }
-    if (!["text", "number", "tel"].includes(field.type)) {
-      return false;
-    }
-
-    if (field.autoCompleteType === "one-time-code") {
-      return true;
-    }
-
-    const totpKeywords = [
-      "totp",
-      "totpcode",
-      "2facode",
-      "mfacode",
-      "otp",
-      "otpcode",
-      "onetimecode",
-      "onetimepassword",
-      "one-time-code",
-      "twofactor",
-      "twofa",
-      "2fa",
-      "mfa",
-      "security_code",
-      "second-factor",
-      "verification",
-      "verify",
-      "code",
-      "pin",
-      "token",
-    ];
-
-    const fieldAttrs = [
+  private getTotpFieldAttrs(field: AutofillField): string {
+    return [
       field.opid,
       field.htmlID,
       field.htmlName,
@@ -1236,8 +1148,61 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
+  }
 
-    return totpKeywords.some((kw) => fieldAttrs.includes(kw));
+  /**
+   * Prüft ob ein Feld ein TOTP/2FA-Feld ist.
+   * Strenge Prüfung: autocomplete="one-time-code" oder spezifische TOTP-Keywords.
+   * Zusätzlich: maxlength 4-8 als Indikator für einmalige Codes.
+   */
+  private isTotpCandidate(field: AutofillField): boolean {
+    if (!field.viewable) {
+      return false;
+    }
+    if (!["text", "number", "tel"].includes(field.type)) {
+      return false;
+    }
+    if (field.autoCompleteType === "one-time-code") {
+      return true;
+    }
+
+    const fieldAttrs = this.getTotpFieldAttrs(field);
+
+    // Spezifische Keywords prüfen
+    if (OverlayBackground.TOTP_KEYWORDS.some((kw) => fieldAttrs.includes(kw))) {
+      return true;
+    }
+
+    // Heuristik: maxlength 4-8 + Feld-Name enthält generisches "code"/"pin"/"token"
+    // → nur in Kombination mit kurzem maxlength als TOTP akzeptieren
+    const maxLen = field.maxLength;
+    if (maxLen && maxLen >= 4 && maxLen <= 8) {
+      const genericKeywords = ["code", "pin", "token", "verify"];
+      if (genericKeywords.some((kw) => fieldAttrs.includes(kw))) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private pageHasTotpFields(pageDetailsList: PageDetail[]): boolean {
+    for (const pd of pageDetailsList) {
+      for (const field of pd.details?.fields || []) {
+        if (this.isTotpCandidate(field)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Prüft ob ein einzelnes Feld TOTP-ähnlich ist (gleiche Logik wie pageHasTotpFields).
+   * Wird verwendet um PageDetails auf reine TOTP-Felder zu filtern.
+   */
+  private isTotpLikeField(field: AutofillField): boolean {
+    return this.isTotpCandidate(field);
   }
 
   /**

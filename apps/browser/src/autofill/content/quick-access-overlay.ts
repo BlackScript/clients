@@ -8,6 +8,7 @@
 
 let quickAccessContainer: HTMLDivElement | null = null;
 let quickAccessShadowRoot: ShadowRoot | null = null;
+let activeEscHandler: ((e: KeyboardEvent) => void) | null = null;
 
 function createQuickAccessOverlay() {
   if (quickAccessContainer) {
@@ -72,17 +73,20 @@ function createQuickAccessOverlay() {
   quickAccessShadowRoot.appendChild(backdrop);
   document.body.appendChild(quickAccessContainer);
 
-  // ESC zum Schließen
-  const escHandler = (e: KeyboardEvent) => {
+  // ESC zum Schließen — Handler merken für saubere Bereinigung
+  activeEscHandler = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       removeQuickAccessOverlay();
-      document.removeEventListener("keydown", escHandler);
     }
   };
-  document.addEventListener("keydown", escHandler);
+  document.addEventListener("keydown", activeEscHandler);
 }
 
 function removeQuickAccessOverlay() {
+  if (activeEscHandler) {
+    document.removeEventListener("keydown", activeEscHandler);
+    activeEscHandler = null;
+  }
   if (quickAccessContainer) {
     quickAccessContainer.remove();
     quickAccessContainer = null;

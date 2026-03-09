@@ -3,11 +3,28 @@ import { BrowserApi } from "../../platform/browser/browser-api";
 export interface TabCipherSession {
   cipherId: string;
   uri: string;
+  hostname: string;
   timestamp: number;
   loginStepIndex: number;
 }
 
 const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 Minuten
+
+/**
+ * Normalisiert einen Hostnamen: entfernt "www." Prefix für konsistentes Matching.
+ * So matchen "www.example.com" und "example.com" korrekt.
+ */
+function normalizeHostname(hostname: string): string {
+  return hostname.replace(/^www\./, "");
+}
+
+function extractHostname(uri: string): string | null {
+  try {
+    return normalizeHostname(new URL(uri).hostname);
+  } catch {
+    return null;
+  }
+}
 
 export class TabSessionCipherService {
   private static _instance: TabSessionCipherService;
@@ -40,11 +57,32 @@ export class TabSessionCipherService {
     this.cleanupInterval = setInterval(() => this.clearExpired(), 60_000);
   }
 
+  /**
+   * Bereinigt alle Ressourcen. Wird beim Extension-Unload aufgerufen.
+   */
+  destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+    this.sessions.clear();
+    this.initialized = false;
+  }
+
   setSession(tabId: number, cipherId: string, uri: string): void {
+    // Automatisch initialisieren falls noch nicht geschehen
+    this.init();
+
+    const hostname = extractHostname(uri);
+    if (!hostname) {
+      return;
+    }
+
     const existing = this.sessions.get(tabId);
     this.sessions.set(tabId, {
       cipherId,
       uri,
+      hostname,
       timestamp: Date.now(),
       loginStepIndex: existing?.cipherId === cipherId ? existing.loginStepIndex + 1 : 0,
     });
@@ -62,15 +100,9 @@ export class TabSessionCipherService {
       return null;
     }
 
-    // Host-Matching: nur wenn der Hostname übereinstimmt
-    try {
-      const storedHost = new URL(session.uri).hostname;
-      const currentHost = new URL(currentUri).hostname;
-      if (storedHost !== currentHost) {
-        this.sessions.delete(tabId);
-        return null;
-      }
-    } catch {
+    // Host-Matching mit Subdomain-Normalisierung
+    const currentHost = extractHostname(currentUri);
+    if (!currentHost || session.hostname !== currentHost) {
       this.sessions.delete(tabId);
       return null;
     }
