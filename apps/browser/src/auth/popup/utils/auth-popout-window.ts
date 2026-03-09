@@ -19,18 +19,36 @@ const extensionUnlockUrls = new Set([
 /**
  * Opens a window that facilitates unlocking / logging into the extension.
  *
+ * Versucht zuerst das native Extension-Popup zu öffnen (chrome.action.openPopup),
+ * das direkt am Browser-Icon erscheint — sauberer als ein separates Fenster.
+ * Fallback auf Popout-Fenster wenn die API nicht verfügbar ist (Firefox, ältere Chrome).
+ *
  * @param senderTab - Used to determine the windowId of the sender.
  */
 async function openUnlockPopout(senderTab: chrome.tabs.Tab) {
+  // Bestehende Unlock-Popouts aufräumen
   const existingPopoutWindowTabs = await BrowserApi.tabsQuery({ windowType: "popup" });
   existingPopoutWindowTabs.forEach((tab) => {
     if (extensionUnlockUrls.has(tab.url)) {
-      // FIXME: Verify that this floating promise is intentional. If it is, add an explanatory comment and ensure there is proper error handling.
       // eslint-disable-next-line @typescript-eslint/no-floating-promises
       BrowserApi.removeWindow(tab.windowId);
     }
   });
 
+  // Versuch 1: Natives Extension-Popup öffnen (Chrome 127+, MV3)
+  // Öffnet das Popup direkt am Extension-Icon — kein separates Fenster nötig.
+  const browserAction = BrowserApi.getBrowserAction();
+  if ("openPopup" in browserAction && typeof browserAction.openPopup === "function") {
+    try {
+      await browserAction.openPopup();
+      await BrowserApi.tabSendMessageData(senderTab, "bgUnlockPopoutOpened", {});
+      return;
+    } catch {
+      // openPopup kann fehlschlagen wenn z.B. kein aktives Fenster existiert
+    }
+  }
+
+  // Fallback: Separates Popout-Fenster öffnen
   await BrowserPopupUtils.openPopout("popup/index.html", {
     singleActionKey: AuthPopoutType.unlockExtension,
     senderWindowId: senderTab.windowId,
