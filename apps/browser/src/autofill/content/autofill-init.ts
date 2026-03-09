@@ -205,10 +205,18 @@ class AutofillInit implements AutofillInitInterface {
     // 2. Blur+Change Events (triggert ExtJS checkChange)
     // 3. Page-Context Script für ExtJS-spezifische API (setRawValue)
     if (attempt === 0) {
-      this.dispatchFrameworkSyncEvents();
+      // Phase 1: Framework-Sync — Reihenfolge ist kritisch für ExtJS (Proxmox)
+      // 1. Erst ExtJS setRawValue() aufrufen (synchronisiert ExtJS-internes Model)
       this.forceFrameworkModelSync();
-      // 200ms warten: ExtJS checkChangeBuffer (~50ms) + Script-Ausführung
-      this.scheduleTimeout(() => this.trySubmitFormClick(0), 200);
+      // 2. Dann DOM-Events dispatchen (input → change → blur)
+      //    ExtJS checkChange() wird durch blur getriggert (checkChangeBuffer: 50ms)
+      this.dispatchFrameworkSyncEvents();
+      // 3. Nochmals ExtJS-Sync nach den Events — fängt Fälle ab wo Events den Wert ändern
+      this.scheduleTimeout(() => {
+        this.forceFrameworkModelSync();
+        // 400ms warten: ExtJS braucht checkChangeBuffer (50ms) + Event-Verarbeitung + Rerender
+        this.scheduleTimeout(() => this.trySubmitFormClick(0), 300);
+      }, 100);
       return;
     }
 
@@ -288,6 +296,22 @@ class AutofillInit implements AutofillInitInterface {
    *
    * Fehlschlag (z.B. wegen CSP) wird still ignoriert — Blur-Events als Fallback.
    */
+  /**
+   * Injiziert ein Script in den Page-Context (nicht Content-Script-Isolation),
+   * das Framework-spezifische APIs aufruft um interne Datenmodelle mit den
+   * aktuellen DOM-Werten zu synchronisieren.
+   *
+   * Aktuell unterstützt: ExtJS (Proxmox, Sencha-basierte Apps).
+   * ExtJS-Textfelder speichern Werte intern als rawValue. Wenn der DOM-Wert
+   * programmatisch gesetzt wird (element.value = x), bleibt rawValue leer.
+   *
+   * Das Script:
+   * 1. Ruft setRawValue() auf (setzt den internen Rohwert)
+   * 2. Ruft setValue() auf (triggert ExtJS-interne Validierung + checkChange)
+   * 3. Markiert das Feld als dirty (damit ExtJS es beim Submit berücksichtigt)
+   *
+   * Fehlschlag (z.B. wegen CSP) wird still ignoriert — Blur-Events als Fallback.
+   */
   private forceFrameworkModelSync() {
     try {
       const script = document.createElement("script");
@@ -295,9 +319,18 @@ class AutofillInit implements AutofillInitInterface {
         try{
           if(typeof Ext!=='undefined'&&Ext.ComponentQuery){
             Ext.ComponentQuery.query('field').forEach(function(f){
-              if(f.inputEl&&f.inputEl.dom&&f.getRawValue&&f.setRawValue){
+              if(f.inputEl&&f.inputEl.dom){
                 var v=f.inputEl.dom.value;
-                if(v&&v!==f.getRawValue()){f.setRawValue(v)}
+                if(!v)return;
+                if(f.setRawValue&&f.getRawValue&&v!==f.getRawValue()){
+                  f.setRawValue(v);
+                }
+                if(f.setValue&&f.getValue&&v!==f.getValue()){
+                  f.suspendEvents&&f.suspendEvents();
+                  f.setValue(v);
+                  f.resumeEvents&&f.resumeEvents();
+                }
+                if(f.markDirty){f.markDirty()}
               }
             });
           }

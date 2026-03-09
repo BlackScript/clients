@@ -230,8 +230,10 @@ export default class RuntimeBackground {
 
         if (this.lockedVaultPendingNotifications?.length > 0) {
           item = this.lockedVaultPendingNotifications.pop();
-          await closeUnlockPopout();
         }
+        // Unlock-Popout immer schließen — auch ohne pending Notifications.
+        // Verhindert verwaiste Browser-Fenster nach dem Entsperren.
+        await closeUnlockPopout();
 
         this.processReloadService.cancelProcessReload();
 
