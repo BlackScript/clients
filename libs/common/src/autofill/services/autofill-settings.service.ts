@@ -114,6 +114,18 @@ const INLINE_MENU_SITE_OVERRIDES = new KeyDefinition<InlineMenuSiteOverride[]>(
   },
 );
 
+/**
+ * Hostnamen, auf denen Auto-Submit nach Autofill NICHT ausgeführt werden soll,
+ * obwohl das globale Setting aktiv ist (Pro-Site-Ausnahmeliste).
+ */
+const AUTO_SUBMIT_SITE_EXCEPTIONS = new KeyDefinition<string[]>(
+  AUTOFILL_SETTINGS_DISK_LOCAL,
+  "autoSubmitSiteExceptions",
+  {
+    deserializer: (value: string[]) => value ?? [],
+  },
+);
+
 const ENABLE_CONTEXT_MENU = new KeyDefinition(AUTOFILL_SETTINGS_DISK, "enableContextMenu", {
   deserializer: (value: boolean) => value ?? true,
 });
@@ -161,6 +173,8 @@ export abstract class AutofillSettingsServiceAbstraction {
   setAutoFillTotpOnPageLoad: (newValue: boolean) => Promise<void>;
   autoSubmitAfterFill$: Observable<boolean>;
   setAutoSubmitAfterFill: (newValue: boolean) => Promise<void>;
+  autoSubmitSiteExceptions$: Observable<string[]>;
+  setAutoSubmitSiteExceptions: (newValue: string[]) => Promise<void>;
   inlineMenuVisibility$: Observable<InlineMenuVisibilitySetting>;
   setInlineMenuVisibility: (newValue: InlineMenuVisibilitySetting) => Promise<void>;
   showInlineMenuIdentities$: Observable<boolean>;
@@ -202,6 +216,9 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
 
   private autoSubmitAfterFillState: ActiveUserState<boolean>;
   readonly autoSubmitAfterFill$: Observable<boolean>;
+
+  private autoSubmitSiteExceptionsState: GlobalState<string[]>;
+  readonly autoSubmitSiteExceptions$: Observable<string[]>;
 
   private inlineMenuVisibilityState: GlobalState<InlineMenuVisibilitySetting>;
   readonly inlineMenuVisibility$: Observable<InlineMenuVisibilitySetting>;
@@ -274,6 +291,11 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
 
     this.autoSubmitAfterFillState = this.stateProvider.getActive(AUTO_SUBMIT_AFTER_FILL);
     this.autoSubmitAfterFill$ = this.autoSubmitAfterFillState.state$.pipe(map((x) => x ?? true));
+
+    this.autoSubmitSiteExceptionsState = this.stateProvider.getGlobal(AUTO_SUBMIT_SITE_EXCEPTIONS);
+    this.autoSubmitSiteExceptions$ = this.autoSubmitSiteExceptionsState.state$.pipe(
+      map((x) => x ?? []),
+    );
 
     this.inlineMenuVisibilityState = this.stateProvider.getGlobal(INLINE_MENU_VISIBILITY);
     this.inlineMenuVisibility$ = this.inlineMenuVisibilityState.state$.pipe(
@@ -363,6 +385,10 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
 
   async setAutoSubmitAfterFill(newValue: boolean): Promise<void> {
     await this.autoSubmitAfterFillState.update(() => newValue);
+  }
+
+  async setAutoSubmitSiteExceptions(newValue: string[]): Promise<void> {
+    await this.autoSubmitSiteExceptionsState.update(() => newValue);
   }
 
   async setInlineMenuVisibility(newValue: InlineMenuVisibilitySetting): Promise<void> {

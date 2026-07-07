@@ -374,6 +374,42 @@
               Wenn aktiviert, wird das Login-Formular nach dem Ausfüllen automatisch abgesendet
             </bit-hint>
           </bit-form-control>
+          <div
+            *ngIf="additionalOptionsForm.value.enableAutoSubmitAfterFill"
+            class="tw-mb-4 tw-ml-8"
+          >
+            <button
+              *ngIf="currentTabHostname"
+              type="button"
+              bitLink
+              linkType="primary"
+              class="tw-text-sm"
+              (click)="toggleCurrentSiteAutoSubmitException()"
+            >
+              {{
+                currentSiteHasAutoSubmitException
+                  ? "Auto-Submit für " + currentTabHostname + " wieder aktivieren"
+                  : "Auto-Submit für " + currentTabHostname + " deaktivieren"
+              }}
+            </button>
+            <div *ngIf="autoSubmitSiteExceptions.length" class="tw-mt-1">
+              <p class="tw-mb-1 tw-text-sm tw-text-muted">Ausnahmen (kein Auto-Submit):</p>
+              <div
+                *ngFor="let hostname of autoSubmitSiteExceptions"
+                class="tw-flex tw-items-center tw-gap-2 tw-text-sm"
+              >
+                <span class="tw-truncate">{{ hostname }}</span>
+                <button
+                  bitIconButton="bwi-close"
+                  buttonType="subtleGhost"
+                  size="small"
+                  type="button"
+                  [attr.aria-label]="'Ausnahme für ' + hostname + ' entfernen'"
+                  (click)="removeAutoSubmitException(hostname)"
+                ></button>
+              </div>
+            </div>
+          </div>
           <bit-form-field
             id="clearClipboardField"
             [disableMargin]="isDefaultUriMatchDisabledByPolicy"

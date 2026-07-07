@@ -175,6 +175,7 @@ export class AutofillComponent implements OnInit {
   showCardsCurrentTab: boolean = true;
   showIdentitiesCurrentTab: boolean = true;
   inlineMenuSiteOverrides: InlineMenuSiteOverride[] = [];
+  autoSubmitSiteExceptions: string[] = [];
   currentTabHostname: string = "";
   /** Non-null asserted. */
   autofillKeyboardHelperText!: string;
@@ -429,6 +430,9 @@ export class AutofillComponent implements OnInit {
     // Site-Overrides laden und aktuellen Hostnamen ermitteln
     this.inlineMenuSiteOverrides = await firstValueFrom(
       this.autofillSettingsService.inlineMenuSiteOverrides$,
+    );
+    this.autoSubmitSiteExceptions = await firstValueFrom(
+      this.autofillSettingsService.autoSubmitSiteExceptions$,
     );
     try {
       const currentTab = await BrowserApi.getTabFromCurrentWindowId();
@@ -734,6 +738,30 @@ export class AutofillComponent implements OnInit {
       o.hostname === hostname ? { ...o, visibility } : o,
     );
     await this.autofillSettingsService.setInlineMenuSiteOverrides(this.inlineMenuSiteOverrides);
+  }
+
+  get currentSiteHasAutoSubmitException(): boolean {
+    return this.autoSubmitSiteExceptions.includes(this.currentTabHostname);
+  }
+
+  async toggleCurrentSiteAutoSubmitException() {
+    if (!this.currentTabHostname) {
+      return;
+    }
+
+    if (this.currentSiteHasAutoSubmitException) {
+      this.autoSubmitSiteExceptions = this.autoSubmitSiteExceptions.filter(
+        (h) => h !== this.currentTabHostname,
+      );
+    } else {
+      this.autoSubmitSiteExceptions = [...this.autoSubmitSiteExceptions, this.currentTabHostname];
+    }
+    await this.autofillSettingsService.setAutoSubmitSiteExceptions(this.autoSubmitSiteExceptions);
+  }
+
+  async removeAutoSubmitException(hostname: string) {
+    this.autoSubmitSiteExceptions = this.autoSubmitSiteExceptions.filter((h) => h !== hostname);
+    await this.autofillSettingsService.setAutoSubmitSiteExceptions(this.autoSubmitSiteExceptions);
   }
 
   getMatchHints() {
