@@ -14,6 +14,7 @@
     "src/autofill/content/auto-submit-login.ts",
     "src/autofill/content/context-menu-handler.ts",
     "src/autofill/content/content-message-handler.ts",
+    "src/autofill/content/quick-access-overlay.ts",
     "src/autofill/fido2/content/fido2-content-script.ts",
     "src/autofill/fido2/content/fido2-page-script.ts",
     "src/autofill/fido2/content/fido2-page-script-delay-append.mv2.ts",

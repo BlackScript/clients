@@ -45,7 +45,11 @@ async function openUnlockPopout(
 
   // Versuch 1: Natives Extension-Popup öffnen (Chrome 127+, MV3)
   // Öffnet das Popup direkt am Extension-Icon — kein separates Fenster nötig.
-  const browserAction = BrowserApi.getBrowserAction();
+  // openPopup existiert nur auf chrome.action (MV3, Chrome 127+), nicht auf
+  // chrome.browserAction (MV2) — daher optionaler Zugriff über schmalen Typ.
+  const browserAction = BrowserApi.getBrowserAction() as
+    | { openPopup?: () => Promise<void> }
+    | undefined;
   if (browserAction && typeof browserAction.openPopup === "function") {
     try {
       await browserAction.openPopup();

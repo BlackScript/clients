@@ -220,13 +220,13 @@
                 [ngModel]="override.visibility"
                 (ngModelChange)="updateSiteOverrideVisibility(override.hostname, $event)"
               >
-                <option [ngValue]="0">Off</option>
-                <option [ngValue]="1">On button click</option>
-                <option [ngValue]="2">On field focus</option>
+                <option [ngValue]="0">Aus</option>
+                <option [ngValue]="1">Bei Klick aufs Symbol</option>
+                <option [ngValue]="2">Bei Feld-Fokus</option>
               </select>
               <button
                 bitIconButton="bwi-close"
-                buttonType="muted"
+                buttonType="subtleGhost"
                 size="small"
                 type="button"
                 (click)="removeSiteOverride(override.hostname)"
