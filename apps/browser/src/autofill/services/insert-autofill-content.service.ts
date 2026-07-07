@@ -10,6 +10,7 @@ import {
   currentlyInSandboxedIframe,
   elementIsFillableFormField,
   elementIsInputElement,
+  elementIsTextAreaElement,
   isReadonlyOrDisabledFormFieldElement,
 } from "../utils";
 
