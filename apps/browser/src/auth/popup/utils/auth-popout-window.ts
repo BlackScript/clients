@@ -46,7 +46,7 @@ async function openUnlockPopout(
   // Versuch 1: Natives Extension-Popup öffnen (Chrome 127+, MV3)
   // Öffnet das Popup direkt am Extension-Icon — kein separates Fenster nötig.
   const browserAction = BrowserApi.getBrowserAction();
-  if ("openPopup" in browserAction && typeof browserAction.openPopup === "function") {
+  if (browserAction && typeof browserAction.openPopup === "function") {
     try {
       await browserAction.openPopup();
       // Pending-Notification erst NACH dem Öffnen einreihen — das Öffnen kann
