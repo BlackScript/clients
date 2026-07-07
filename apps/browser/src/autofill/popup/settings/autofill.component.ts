@@ -1,15 +1,7 @@
-// FIXME: Update this file to be type safe and remove this and next line
-// @ts-strict-ignore
 import { CommonModule } from "@angular/common";
 import { Component, DestroyRef, OnInit } from "@angular/core";
 import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
-import {
-  FormBuilder,
-  FormControl,
-  FormGroup,
-  FormsModule,
-  ReactiveFormsModule,
-} from "@angular/forms";
+import { FormControl, FormGroup, FormsModule, ReactiveFormsModule } from "@angular/forms";
 import { RouterModule } from "@angular/router";
 import {
   concatMap,
@@ -25,8 +17,6 @@ import {
 
 import { JslibModule } from "@bitwarden/angular/jslib.module";
 import { NudgesService, NudgeType } from "@bitwarden/angular/vault";
-import { SpotlightComponent } from "@bitwarden/angular/vault/components/spotlight/spotlight.component";
-import { PolicyService } from "@bitwarden/common/admin-console/abstractions/policy/policy.service.abstraction";
 import { Account, AccountService } from "@bitwarden/common/auth/abstractions/account.service";
 import { getUserId } from "@bitwarden/common/auth/services/account.service";
 import {
@@ -48,6 +38,7 @@ import {
   DisablePasswordManagerUri,
   InlineMenuVisibilitySetting,
 } from "@bitwarden/common/autofill/types";
+import { FeatureFlag } from "@bitwarden/common/enums/feature-flag.enum";
 import {
   UriMatchStrategy,
   UriMatchStrategySetting,
@@ -60,6 +51,8 @@ import { VaultSettingsService } from "@bitwarden/common/vault/abstractions/vault
 import { CipherType } from "@bitwarden/common/vault/enums";
 import { RestrictedItemTypesService } from "@bitwarden/common/vault/services/restricted-item-types.service";
 import {
+  ButtonModule,
+  CalloutModule,
   CardComponent,
   CheckboxModule,
   DialogService,
@@ -80,14 +73,19 @@ import { PopOutComponent } from "../../../platform/popup/components/pop-out.comp
 import { PopupHeaderComponent } from "../../../platform/popup/layout/popup-header.component";
 import { PopupPageComponent } from "../../../platform/popup/layout/popup-page.component";
 
+import { FillAssistPopoverComponent } from "./fill-assist-popover/fill-assist-popover.component";
+
 // FIXME(https://bitwarden.atlassian.net/browse/CL-764): Migrate to OnPush
 // eslint-disable-next-line @angular-eslint/prefer-on-push-component-change-detection
 @Component({
   templateUrl: "autofill.component.html",
   imports: [
+    ButtonModule,
+    CalloutModule,
     CardComponent,
     CheckboxModule,
     CommonModule,
+    FillAssistPopoverComponent,
     FormFieldModule,
     FormsModule,
     IconButtonModule,
@@ -103,7 +101,6 @@ import { PopupPageComponent } from "../../../platform/popup/layout/popup-page.co
     SelectModule,
     TypographyModule,
     ReactiveFormsModule,
-    SpotlightComponent,
   ],
 })
 export class AutofillComponent implements OnInit {
@@ -120,6 +117,7 @@ export class AutofillComponent implements OnInit {
     DisablePasswordManagerUris.Unknown;
   protected browserShortcutsURI: BrowserShortcutsUri = BrowserShortcutsUris.Unknown;
   protected browserClientIsUnknown: boolean;
+  private privacyPermissionIsGranted = false;
   protected autofillOnPageLoadFromPolicy$ =
     this.autofillSettingsService.activateAutofillOnPageLoadFromPolicy$;
   protected showSpotlightNudge$: Observable<boolean> = this.accountService.activeAccount$.pipe(
@@ -133,6 +131,12 @@ export class AutofillComponent implements OnInit {
       map((restrictedTypes) => restrictedTypes.some((type) => type.cipherType === CipherType.Card)),
       shareReplay({ bufferSize: 1, refCount: true }),
     );
+  protected showClipboardNotification$: Observable<boolean> =
+    this.autofillSettingsService.showClipboardSettingUpdateNotification$;
+  protected showClipboardNotificationThisSession = false;
+  protected fillAssistFeatureEnabled$: Observable<boolean> = this.configService.getFeatureFlag$(
+    FeatureFlag.FillAssistTargetingRules,
+  );
 
   protected autofillOnPageLoadForm = new FormGroup({
     autofillOnPageLoad: new FormControl(),
@@ -140,6 +144,7 @@ export class AutofillComponent implements OnInit {
   });
 
   protected additionalOptionsForm = new FormGroup({
+    enableFillAssist: new FormControl(),
     enableContextMenuItem: new FormControl(),
     enableAutoTotpCopy: new FormControl(),
     enableAutoFillTotpOnPageLoad: new FormControl(),
@@ -166,7 +171,7 @@ export class AutofillComponent implements OnInit {
   clearClipboard!: ClearClipboardDelaySetting;
   clearClipboardOptions: { name: string; value: ClearClipboardDelaySetting }[];
   defaultUriMatch: UriMatchStrategySetting = UriMatchStrategy.Domain;
-  uriMatchOptions: { name: string; value: UriMatchStrategySetting; disabled?: boolean }[];
+  uriMatchOptions: { name: string; value: UriMatchStrategySetting | null; disabled?: boolean }[];
   showCardsCurrentTab: boolean = true;
   showIdentitiesCurrentTab: boolean = true;
   inlineMenuSiteOverrides: InlineMenuSiteOverride[] = [];
@@ -176,6 +181,7 @@ export class AutofillComponent implements OnInit {
   accountSwitcherEnabled: boolean = false;
 
   constructor(
+    private configService: ConfigService,
     private i18nService: I18nService,
     private platformUtilsService: PlatformUtilsService,
     private domainSettingsService: DomainSettingsService,
@@ -183,14 +189,11 @@ export class AutofillComponent implements OnInit {
     private autofillSettingsService: AutofillSettingsServiceAbstraction,
     private messagingService: MessagingService,
     private vaultSettingsService: VaultSettingsService,
-    private configService: ConfigService,
-    private formBuilder: FormBuilder,
     private destroyRef: DestroyRef,
     private nudgesService: NudgesService,
     private accountService: AccountService,
     private autofillBrowserSettingsService: AutofillBrowserSettingsService,
     private restrictedItemTypesService: RestrictedItemTypesService,
-    private policyService: PolicyService,
   ) {
     this.autofillOnPageLoadOptions = [
       { name: this.i18nService.t("autoFillOnPageLoadYes"), value: true },
@@ -228,10 +231,25 @@ export class AutofillComponent implements OnInit {
   async ngOnInit() {
     this.canOverrideBrowserAutofillSetting = !this.browserClientIsUnknown;
 
+    if (this.canOverrideBrowserAutofillSetting) {
+      this.privacyPermissionIsGranted = await this.privacyPermissionGranted();
+    }
+
     this.defaultBrowserAutofillDisabled =
       await this.autofillBrowserSettingsService.isBrowserAutofillSettingOverridden(
         this.browserClientVendor,
       );
+
+    if (
+      (await this.autofillBrowserSettingsService.resumeGrantedPendingDefaultPasswordManagerApply(
+        this.browserClientVendor,
+      )) !== null
+    ) {
+      this.defaultBrowserAutofillDisabled =
+        await this.autofillBrowserSettingsService.isBrowserAutofillSettingOverridden(
+          this.browserClientVendor,
+        );
+    }
 
     this.inlineMenuVisibility = await firstValueFrom(
       this.autofillSettingsService.inlineMenuVisibility$,
@@ -296,6 +314,18 @@ export class AutofillComponent implements OnInit {
       });
 
     /** Additional options form */
+
+    const enableFillAssist = await firstValueFrom(this.domainSettingsService.enableFillAssist$);
+
+    this.additionalOptionsForm.controls.enableFillAssist.patchValue(enableFillAssist, {
+      emitEvent: false,
+    });
+
+    this.additionalOptionsForm.controls.enableFillAssist.valueChanges
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((value) => {
+        void this.domainSettingsService.setEnableFillAssist(value);
+      });
 
     this.enableContextMenuItem = await firstValueFrom(
       this.autofillSettingsService.enableContextMenu$,
@@ -408,21 +438,22 @@ export class AutofillComponent implements OnInit {
     } catch {
       // URL-Parsing fehlgeschlagen
     }
-  }
 
-  get spotlightButtonIcon() {
-    if (this.browserClientVendor === BrowserClientVendors.Unknown) {
-      return "bwi-external-link";
+    // Show clipboard notification on first visit, mark as dismissed for future visits
+    const shouldShowNotification = await firstValueFrom(this.showClipboardNotification$);
+
+    if (shouldShowNotification) {
+      // Show it for THIS page session
+      this.showClipboardNotificationThisSession = true;
+
+      // Mark as dismissed in storage (so it won't show on future visits)
+      await this.autofillSettingsService.setClipboardSettingUpdatedNotificationDismissed(true);
     }
-    return null;
   }
 
   get browserClientVendorExtended() {
     if (this.browserClientVendor !== BrowserClientVendors.Unknown) {
       return this.browserClientVendor;
-    }
-    if (this.platformUtilsService.isFirefox()) {
-      return "Firefox";
     }
     if (this.platformUtilsService.isSafari()) {
       return "Safari";
@@ -488,7 +519,7 @@ export class AutofillComponent implements OnInit {
     // If the destination is a password management settings page, ask the user to confirm before proceeding
     if (uri === DisablePasswordManagerUris[this.browserClientVendor]) {
       await this.dialogService.openSimpleDialog({
-        ...(this.browserClientIsUnknown
+        ...(uri === DisablePasswordManagerUris.Unknown
           ? {
               content: { key: "confirmContinueToHelpCenterPasswordManagementContent" },
               title: { key: "confirmContinueToHelpCenter" },
@@ -511,7 +542,7 @@ export class AutofillComponent implements OnInit {
     // If the destination is a browser shortcut settings page, ask the user to confirm before proceeding
     if (uri === BrowserShortcutsUris[this.browserClientVendor]) {
       await this.dialogService.openSimpleDialog({
-        ...(this.browserClientIsUnknown
+        ...(uri === BrowserShortcutsUris.Unknown
           ? {
               content: { key: "confirmContinueToHelpCenterKeyboardShortcutsContent" },
               title: { key: "confirmContinueToHelpCenter" },
@@ -554,25 +585,40 @@ export class AutofillComponent implements OnInit {
   }
 
   async updateDefaultBrowserAutofillDisabled() {
+    if (
+      BrowserApi.isFirefox &&
+      this.defaultBrowserAutofillDisabled &&
+      !this.privacyPermissionIsGranted
+    ) {
+      void this.autofillBrowserSettingsService.requestPrivacyPermissionFromUserGesture();
+      await this.autofillBrowserSettingsService.completeFirefoxPopupPermissionFlow(window);
+
+      return;
+    }
+
     const privacyPermissionGranted = await this.privacyPermissionGranted();
+    this.privacyPermissionIsGranted = privacyPermissionGranted;
     if (!this.defaultBrowserAutofillDisabled && !privacyPermissionGranted) {
       return;
     }
 
-    if (
-      !privacyPermissionGranted &&
-      !(await BrowserApi.requestPermission({ permissions: ["privacy"] }))
-    ) {
-      await this.dialogService.openSimpleDialog({
-        title: { key: "privacyPermissionAdditionNotGrantedTitle" },
-        content: { key: "privacyPermissionAdditionNotGrantedDescription" },
-        acceptButtonText: { key: "ok" },
-        cancelButtonText: null,
-        type: "warning",
-      });
-      this.defaultBrowserAutofillDisabled = false;
+    if (!privacyPermissionGranted) {
+      const granted =
+        await this.autofillBrowserSettingsService.ensurePrivacyPermissionForOverride();
+      if (!granted) {
+        await this.dialogService.openSimpleDialog({
+          title: { key: "privacyPermissionAdditionNotGrantedTitle" },
+          content: { key: "privacyPermissionAdditionNotGrantedDescription" },
+          acceptButtonText: { key: "ok" },
+          cancelButtonText: null,
+          type: "warning",
+        });
+        this.defaultBrowserAutofillDisabled = false;
 
-      return;
+        return;
+      }
+
+      this.privacyPermissionIsGranted = true;
     }
 
     await BrowserApi.updateDefaultBrowserAutofillSettings(!this.defaultBrowserAutofillDisabled);
@@ -608,17 +654,26 @@ export class AutofillComponent implements OnInit {
     const isAdvanced =
       current === UriMatchStrategy.StartsWith || current === UriMatchStrategy.RegularExpression;
     if (!valueChange || !isAdvanced) {
-      return await this.domainSettingsService.setDefaultUriMatchStrategy(current);
+      if (current !== null) {
+        await this.domainSettingsService.setDefaultUriMatchStrategy(current);
+      }
+      return;
+    }
+    const contentKey = this.advancedOptionWarningMap[current];
+    if (!contentKey) {
+      return;
     }
     AdvancedUriOptionDialogComponent.open(this.dialogService, {
-      contentKey: this.advancedOptionWarningMap[current],
+      contentKey,
       onContinue: async () => {
         this.additionalOptionsForm.controls.defaultUriMatch.setValue(current);
         await this.domainSettingsService.setDefaultUriMatchStrategy(current);
       },
       onCancel: async () => {
         this.additionalOptionsForm.controls.defaultUriMatch.setValue(previous);
-        await this.domainSettingsService.setDefaultUriMatchStrategy(previous);
+        if (previous !== null) {
+          await this.domainSettingsService.setDefaultUriMatchStrategy(previous);
+        }
       },
     });
   }
@@ -689,7 +744,10 @@ export class AutofillComponent implements OnInit {
       strategy === UriMatchStrategy.StartsWith ||
       strategy === UriMatchStrategy.RegularExpression
     ) {
-      hints.push(this.advancedOptionWarningMap[strategy]);
+      const hint = this.advancedOptionWarningMap[strategy];
+      if (hint) {
+        hints.push(hint);
+      }
     }
     return hints;
   }
@@ -708,5 +766,16 @@ export class AutofillComponent implements OnInit {
     } else {
       await this.openURI(event, this.disablePasswordManagerURI);
     }
+  }
+
+  async dismissClipboardNotification() {
+    this.showClipboardNotificationThisSession = false;
+    await this.autofillSettingsService.setClipboardSettingUpdatedNotificationDismissed(true);
+
+    // Scroll to the clear clipboard field
+    setTimeout(() => {
+      const element = document.getElementById("clearClipboardField");
+      element?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 100);
   }
 }

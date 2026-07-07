@@ -1,5 +1,6 @@
 // FIXME: Update this file to be type safe and remove this and next line
 // @ts-strict-ignore
+import { LockedVaultPendingNotificationsData } from "../../../autofill/background/abstractions/notification.background";
 import { BrowserApi } from "../../../platform/browser/browser-api";
 import BrowserPopupUtils from "../../../platform/browser/browser-popup-utils";
 
@@ -18,14 +19,21 @@ const extensionUnlockUrls = new Set([
 
 /**
  * Opens a window that facilitates unlocking / logging into the extension.
+ * If a pending notification is provided, it is queued AFTER the popout is created.
+ * This ordering is required because opening the popout can trigger tab removal events
+ * (particularly in Safari) that clear the pending notification queue.
  *
  * Versucht zuerst das native Extension-Popup zu öffnen (chrome.action.openPopup),
  * das direkt am Browser-Icon erscheint — sauberer als ein separates Fenster.
  * Fallback auf Popout-Fenster wenn die API nicht verfügbar ist (Firefox, ältere Chrome).
  *
  * @param senderTab - Used to determine the windowId of the sender.
+ * @param pendingNotification - Optional pending notification to queue after the popout opens.
  */
-async function openUnlockPopout(senderTab: chrome.tabs.Tab) {
+async function openUnlockPopout(
+  senderTab: chrome.tabs.Tab,
+  pendingNotification?: LockedVaultPendingNotificationsData,
+) {
   // Bestehende Unlock-Popouts aufräumen
   const existingPopoutWindowTabs = await BrowserApi.tabsQuery({ windowType: "popup" });
   existingPopoutWindowTabs.forEach((tab) => {
@@ -41,6 +49,15 @@ async function openUnlockPopout(senderTab: chrome.tabs.Tab) {
   if ("openPopup" in browserAction && typeof browserAction.openPopup === "function") {
     try {
       await browserAction.openPopup();
+      // Pending-Notification erst NACH dem Öffnen einreihen — das Öffnen kann
+      // Tab-Removal-Events auslösen, die die Queue leeren (siehe Upstream-Doku oben)
+      if (pendingNotification) {
+        await BrowserApi.tabSendMessageData(
+          senderTab,
+          "addToLockedVaultPendingNotifications",
+          pendingNotification,
+        );
+      }
       await BrowserApi.tabSendMessageData(senderTab, "bgUnlockPopoutOpened", {});
       return;
     } catch {
@@ -53,6 +70,15 @@ async function openUnlockPopout(senderTab: chrome.tabs.Tab) {
     singleActionKey: AuthPopoutType.unlockExtension,
     senderWindowId: senderTab.windowId,
   });
+
+  if (pendingNotification) {
+    await BrowserApi.tabSendMessageData(
+      senderTab,
+      "addToLockedVaultPendingNotifications",
+      pendingNotification,
+    );
+  }
+
   await BrowserApi.tabSendMessageData(senderTab, "bgUnlockPopoutOpened", {});
 }
 
