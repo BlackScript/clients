@@ -154,6 +154,8 @@ describe("AutofillService", () => {
     autofillSettingsService.showInlineMenuCards$ = showInlineMenuCardsMock$;
     autofillSettingsService.showInlineMenuIdentities$ = showInlineMenuIdentitiesMock$;
     autofillSettingsService.autofillOnPageLoad$ = of(true);
+    autofillSettingsService.autoSubmitAfterFill$ = of(false);
+    autofillSettingsService.autoFillTotpOnPageLoad$ = of(false);
     activeAccountStatusMock$ = new BehaviorSubject(AuthenticationStatus.Unlocked);
     authService = mock<AuthService>();
     authService.activeAccountStatus$ = activeAccountStatusMock$;
@@ -850,6 +852,7 @@ describe("AutofillService", () => {
           },
           url: currentAutofillPageDetails.tab.url,
           pageDetailsUrl: "url",
+          autoSubmitAfterFill: false,
           showAnimations: true,
         },
         {
