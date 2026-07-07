@@ -244,9 +244,7 @@ export class AutofillSettingsService implements AutofillSettingsServiceAbstracti
     );
 
     this.autoSubmitAfterFillState = this.stateProvider.getActive(AUTO_SUBMIT_AFTER_FILL);
-    this.autoSubmitAfterFill$ = this.autoSubmitAfterFillState.state$.pipe(
-      map((x) => x ?? false),
-    );
+    this.autoSubmitAfterFill$ = this.autoSubmitAfterFillState.state$.pipe(map((x) => x ?? true));
 
     this.inlineMenuVisibilityState = this.stateProvider.getGlobal(INLINE_MENU_VISIBILITY);
     this.inlineMenuVisibility$ = this.inlineMenuVisibilityState.state$.pipe(
