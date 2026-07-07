@@ -57,10 +57,26 @@ async function openUnlockPopout(senderTab: chrome.tabs.Tab) {
 }
 
 /**
- * Closes the unlock popout window.
+ * Schließt alle Unlock-Popout-Fenster — sowohl die über singleActionKey
+ * geöffneten als auch verwaiste Popup-Fenster mit Unlock-URLs.
  */
 async function closeUnlockPopout() {
+  // Erst den Standard-Weg (singleActionKey-basiert)
   await BrowserPopupUtils.closeSingleActionPopout(AuthPopoutType.unlockExtension);
+
+  // Zusätzlich: Alle verwaisten Popup-Fenster mit Unlock-URLs aufräumen
+  // (können entstehen wenn openPopup() fehlschlägt und der Fallback greift,
+  // oder wenn mehrere Unlock-Trigger gleichzeitig feuern)
+  try {
+    const popupTabs = await BrowserApi.tabsQuery({ windowType: "popup" });
+    for (const tab of popupTabs) {
+      if (tab.url && extensionUnlockUrls.has(tab.url)) {
+        await BrowserApi.removeWindow(tab.windowId);
+      }
+    }
+  } catch {
+    // Fehler beim Aufräumen ignorieren — nicht kritisch
+  }
 }
 
 /**
