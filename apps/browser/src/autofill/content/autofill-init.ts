@@ -27,6 +27,7 @@ class AutofillInit implements AutofillInitInterface {
   private lastContextMenuClickedElement: HTMLElement | null = null;
   private isMonitoring = false;
   private lastFilledElement: HTMLElement | null = null;
+  private autoSubmitFormOpids: string[] = [];
   private autoSubmitInProgress = false;
   private autoSubmitClickCount = 0;
   private static readonly MAX_AUTO_SUBMIT_CLICKS = 2; // Login + TOTP, dann Stop
@@ -201,6 +202,9 @@ class AutofillInit implements AutofillInitInterface {
     }
 
     this.blurFocusedFieldAndCloseInlineMenu();
+    // Autoritative Form-opids aus dem Fill-Script (Upstream-Mechanismus, siehe
+    // generateFillScript mit autoSubmitLogin) — Vorrang vor der DOM-Heuristik.
+    this.autoSubmitFormOpids = fillScript.autosubmit ?? [];
     await this.sendExtensionMessage("updateIsFieldCurrentlyFilling", {
       isFieldCurrentlyFilling: true,
     });
@@ -418,7 +422,7 @@ class AutofillInit implements AutofillInitInterface {
    */
   private findAndClickSubmitButton(): boolean {
     const filledEl = this.lastFilledElement;
-    const form = filledEl?.closest("form") as HTMLFormElement;
+    const form = this.getAutoSubmitFormByOpid() ?? (filledEl?.closest("form") as HTMLFormElement);
 
     // 1. Enabled Submit-Button im Formular (oder global)
     // Drei Fälle: explizit type="submit", button OHNE type (default=submit in HTML5),
@@ -487,6 +491,25 @@ class AutofillInit implements AutofillInitInterface {
     }
 
     return false;
+  }
+
+  /**
+   * Löst das Ziel-Formular über die opids aus dem Fill-Script auf.
+   * Die opid wird vom CollectAutofillContentService als Property an
+   * jedes erfasste Formular-Element geschrieben.
+   */
+  private getAutoSubmitFormByOpid(): HTMLFormElement | null {
+    if (!this.autoSubmitFormOpids.length) {
+      return null;
+    }
+    const forms = document.querySelectorAll("form");
+    for (const form of Array.from(forms)) {
+      const opid = (form as HTMLFormElement & { opid?: string }).opid;
+      if (opid && this.autoSubmitFormOpids.includes(opid)) {
+        return form;
+      }
+    }
+    return null;
   }
 
   /**

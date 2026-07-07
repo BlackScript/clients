@@ -449,6 +449,13 @@ export default class AutofillService implements AutofillServiceInterface {
       options.cipher.login.totp = undefined;
     }
 
+    // Auto-Submit-Entscheidung einmal vorab treffen (nicht pro Frame):
+    // globales Setting + Pro-Site-Ausnahmeliste; Enterprise-AutoSubmit hat Vorrang.
+    const shouldAutoSubmit =
+      !options.autoSubmitLogin &&
+      (await firstValueFrom(this.autofillSettingsService.autoSubmitAfterFill$)) &&
+      !(await this.isAutoSubmitSiteException(tabUrl));
+
     let didAutofill = false;
     await Promise.all(
       options.pageDetails.map(async (pd) => {
@@ -470,7 +477,9 @@ export default class AutofillService implements AutofillServiceInterface {
           onlyEmptyFields: options.onlyEmptyFields || false,
           fillNewPassword: options.fillNewPassword || false,
           allowTotpAutofill: options.allowTotpAutofill || false,
-          autoSubmitLogin: options.autoSubmitLogin || false,
+          // Auch bei Nutzer-Auto-Submit aktivieren: befüllt fillScript.autosubmit mit den
+          // autoritativen Form-opids (Upstream-Mechanismus) statt DOM-Heuristik im Content-Script.
+          autoSubmitLogin: options.autoSubmitLogin || shouldAutoSubmit,
           cipher: options.cipher,
           tabUrl,
           defaultUriMatch: defaultUriMatch,
@@ -498,11 +507,6 @@ export default class AutofillService implements AutofillServiceInterface {
         if (!options.skipLastUsed && activeAccount?.id) {
           await this.cipherService.updateLastUsedDate(options.cipher.id, activeAccount.id);
         }
-
-        // Auto-Submit-Setting prüfen (nur wenn nicht bereits Enterprise-AutoSubmit aktiv)
-        const shouldAutoSubmit =
-          !options.autoSubmitLogin &&
-          (await firstValueFrom(this.autofillSettingsService.autoSubmitAfterFill$));
 
         const showAnimations =
           (await firstValueFrom(this.animationControlService.enableAutofillAnimation$)) ?? true;
@@ -550,6 +554,22 @@ export default class AutofillService implements AutofillServiceInterface {
       }
     } else {
       throw new Error("Did not autofill.");
+    }
+  }
+
+  /**
+   * Prüft ob der Hostname der Tab-URL auf der Auto-Submit-Ausnahmeliste steht.
+   * Subdomains einer gelisteten Domain zählen ebenfalls als Ausnahme.
+   */
+  private async isAutoSubmitSiteException(tabUrl: string): Promise<boolean> {
+    try {
+      const hostname = new URL(tabUrl).hostname.replace(/^www\./, "");
+      const exceptions = await firstValueFrom(
+        this.autofillSettingsService.autoSubmitSiteExceptions$,
+      );
+      return exceptions.some((h) => hostname === h || hostname.endsWith("." + h));
+    } catch {
+      return false;
     }
   }
 

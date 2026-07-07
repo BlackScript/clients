@@ -155,6 +155,7 @@ describe("AutofillService", () => {
     autofillSettingsService.showInlineMenuIdentities$ = showInlineMenuIdentitiesMock$;
     autofillSettingsService.autofillOnPageLoad$ = of(true);
     autofillSettingsService.autoSubmitAfterFill$ = of(false);
+    autofillSettingsService.autoSubmitSiteExceptions$ = of([]);
     autofillSettingsService.autoFillTotpOnPageLoad$ = of(false);
     activeAccountStatusMock$ = new BehaviorSubject(AuthenticationStatus.Unlocked);
     authService = mock<AuthService>();
