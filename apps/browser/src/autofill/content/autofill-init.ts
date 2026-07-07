@@ -174,6 +174,11 @@ class AutofillInit implements AutofillInitInterface {
       this.autoSubmitClickCount < AutofillInit.MAX_AUTO_SUBMIT_CLICKS
     ) {
       this.autoSubmitInProgress = true;
+      // Safety-Timeout: autoSubmitInProgress nach 10s zurücksetzen,
+      // falls der Submit-Prozess hängenbleibt (Netzwerkfehler, unerwarteter Zustand)
+      this.scheduleTimeout(() => {
+        this.autoSubmitInProgress = false;
+      }, 10000);
       this.scheduleTimeout(() => this.trySubmitForm(), 500);
     }
   }
@@ -208,15 +213,18 @@ class AutofillInit implements AutofillInitInterface {
       // Phase 1: Framework-Sync — Reihenfolge ist kritisch für ExtJS (Proxmox)
       // 1. Erst ExtJS setRawValue() aufrufen (synchronisiert ExtJS-internes Model)
       this.forceFrameworkModelSync();
-      // 2. Dann DOM-Events dispatchen (input → change → blur)
+      // 2. Dann DOM-Events dispatchen (input → change → blur → focusout)
       //    ExtJS checkChange() wird durch blur getriggert (checkChangeBuffer: 50ms)
       this.dispatchFrameworkSyncEvents();
       // 3. Nochmals ExtJS-Sync nach den Events — fängt Fälle ab wo Events den Wert ändern
       this.scheduleTimeout(() => {
         this.forceFrameworkModelSync();
+        // 4. Enter-Taste im gefüllten Feld simulieren — ExtJS/Proxmox reagiert auf
+        //    Enter um Formulare abzusenden, bevor der Button überhaupt gesucht wird.
+        this.simulateEnterKeyOnFilledField();
         // 400ms warten: ExtJS braucht checkChangeBuffer (50ms) + Event-Verarbeitung + Rerender
-        this.scheduleTimeout(() => this.trySubmitFormClick(0), 300);
-      }, 100);
+        this.scheduleTimeout(() => this.trySubmitFormClick(0), 400);
+      }, 150);
       return;
     }
 
@@ -250,7 +258,9 @@ class AutofillInit implements AutofillInitInterface {
         if (tracker) {
           tracker.setValue("");
         }
-        // Events in korrekter Reihenfolge: input → change → blur
+        // Erst fokussieren — ExtJS bindet checkChange an den Focus/Blur-Zyklus
+        input.focus();
+        // Events in korrekter Reihenfolge: input → change → blur → focusout
         input.dispatchEvent(
           new InputEvent("input", {
             bubbles: true,
@@ -260,7 +270,10 @@ class AutofillInit implements AutofillInitInterface {
           }),
         );
         input.dispatchEvent(new Event("change", { bubbles: true }));
-        input.dispatchEvent(new Event("blur", { bubbles: true }));
+        // blur UND focusout — blur bubbelt nicht nativ, focusout schon.
+        // ExtJS nutzt blur direkt am Element, manche Frameworks hören auf focusout.
+        input.dispatchEvent(new FocusEvent("blur", { bubbles: false, relatedTarget: null }));
+        input.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
       }
     }
   }
@@ -357,11 +370,25 @@ class AutofillInit implements AutofillInitInterface {
     const form = filledEl?.closest("form") as HTMLFormElement;
 
     // 1. Enabled Submit-Button im Formular (oder global)
+    // Drei Fälle: explizit type="submit", button OHNE type (default=submit in HTML5),
+    // oder input[type='submit']. CSS [type=submit] matcht NICHT den HTML-Default!
     const submitSelector =
-      "button[type='submit']:not([disabled]), input[type='submit']:not([disabled])";
-    const submitBtn =
+      "button[type='submit']:not([disabled]), " +
+      "button:not([type]):not([disabled]), " +
+      "input[type='submit']:not([disabled])";
+    let submitBtn =
       form?.querySelector<HTMLElement>(submitSelector) ||
       document.querySelector<HTMLElement>(submitSelector);
+
+    // Buttons ohne type in Formularen sind Submit-Buttons (HTML5-Standard),
+    // aber außerhalb von Formularen könnten sie beliebige Funktionen haben.
+    // Daher: button:not([type]) außerhalb eines Formulars nur akzeptieren
+    // wenn es auch Submit-Keywords enthält.
+    if (submitBtn && !submitBtn.hasAttribute("type") && !submitBtn.closest("form")) {
+      if (!this.isSubmitElement(submitBtn)) {
+        submitBtn = null;
+      }
+    }
 
     if (submitBtn && this.isElementVisible(submitBtn)) {
       this.simulateFullClick(submitBtn);
@@ -392,6 +419,22 @@ class AutofillInit implements AutofillInitInterface {
       }
     }
 
+    // 4. Letzter Fallback: form.requestSubmit() oder form.submit()
+    // requestSubmit() ist bevorzugt — triggert submit-Event + HTML5-Validierung.
+    if (form) {
+      try {
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit();
+        } else {
+          form.submit();
+        }
+        this.autoSubmitClickCount++;
+        return true;
+      } catch {
+        // Submit fehlgeschlagen (z.B. Validierungsfehler) — kein Fehler
+      }
+    }
+
     return false;
   }
 
@@ -406,6 +449,30 @@ class AutofillInit implements AutofillInitInterface {
     element.dispatchEvent(new MouseEvent("mousedown", eventInit));
     element.dispatchEvent(new MouseEvent("mouseup", eventInit));
     element.click();
+  }
+
+  /**
+   * Simuliert Enter-Taste im zuletzt gefüllten Feld.
+   * ExtJS (Proxmox) und viele andere Frameworks behandeln Enter-Taste als
+   * Form-Submit-Trigger. Das ist oft zuverlässiger als Button-Klick bei SPAs.
+   */
+  private simulateEnterKeyOnFilledField() {
+    const filledEl = this.lastFilledElement;
+    if (!filledEl || !document.contains(filledEl)) {
+      return;
+    }
+    filledEl.focus();
+    const enterInit: KeyboardEventInit = {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+    };
+    filledEl.dispatchEvent(new KeyboardEvent("keydown", enterInit));
+    filledEl.dispatchEvent(new KeyboardEvent("keypress", enterInit));
+    filledEl.dispatchEvent(new KeyboardEvent("keyup", enterInit));
   }
 
   /**

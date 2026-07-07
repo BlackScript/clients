@@ -285,8 +285,13 @@ class InsertAutofillContentService implements InsertAutofillContentServiceInterf
       : null;
 
     if (nativeValueSetter) {
-      // Via nativen Setter setzen — umgeht Framework-Wrapper
+      // Zuerst den Wert über den nativen Setter setzen — umgeht Framework-Wrapper
+      // (React, Vue, Angular überschreiben element.value mit eigenen Settern)
+      const currentValue = element.value;
       fallbackSetter();
+      const newValue = element.value;
+      // Nochmals via nativen Setter setzen, damit der DOM-Wert sicher korrekt ist
+      nativeValueSetter.call(element, newValue || currentValue);
       // React _valueTracker zurücksetzen damit onChange korrekt feuert
       this.resetReactValueTracker(element);
     } else {
